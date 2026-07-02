@@ -47,5 +47,5 @@
   - ⚠️ ElevenLabs key trong .env bị 401 (key không còn hiệu lực) — cần key mới nếu muốn
     dùng giọng ElevenLabs; không phải lỗi app.
   - Đường lỗi: video không có phụ đề nhúng → FFmpeg fail đúng cách, app sẽ báo lỗi rõ. ✅
-- [ ] **V3b.** (Người dùng test) Thao tác UI thật: tạo project với video thật, chạy ASR,
+- [x] **V3b.** (Người dùng test, 2026-07-03 OK) Thao tác UI thật: tạo project với video thật, chạy ASR,
   dịch, lồng tiếng, xuất video end-to-end.

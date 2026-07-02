@@ -35,4 +35,4 @@
 - [x] **V2.** (AI test, 2026-07-03) E2E bằng API thật: Edge TTS sinh giọng Việt 4 câu →
   Whisper word-level → `buildSegmentsFromWords` (code thật, compile esbuild) ra 4 câu khớp
   mốc thời gian → GPT dịch format mới parse 4/4. Toàn bộ PASS.
-- [ ] **V3.** (Người dùng nghiệm thu) Phụ đề khớp lời nói trên video thực tế của chủ dự án.
+- [x] **V3.** (Người dùng nghiệm thu, 2026-07-03 OK) Phụ đề khớp lời nói trên video thực tế của chủ dự án.
