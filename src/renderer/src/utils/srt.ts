@@ -119,6 +119,8 @@ export interface WhisperSegmentRaw {
 }
 
 const MIN_SEGMENT_DURATION_MS = 300;
+// Chữ hiện sớm hơn lời nói một nhịp để mắt kịp bắt (chuẩn phụ đề chuyên nghiệp ~2 frame+)
+const SUBTITLE_LEAD_IN_MS = 200;
 
 // Chỉ giữ chữ/số (mọi ngôn ngữ) để so khớp từ với câu — bỏ dấu câu, khoảng trắng
 function normalizeForMatch(s: string): string {
@@ -179,6 +181,9 @@ export function buildSegmentsFromWords(
         startMs = seg.start;
         endMs = seg.end;
       }
+
+      // Lead-in: đẩy chữ lên sớm hơn lời nói, nhưng không lấn vào câu trước
+      startMs = Math.max(0, startMs - SUBTITLE_LEAD_IN_MS);
 
       if (endMs - startMs < MIN_SEGMENT_DURATION_MS) {
         endMs = startMs + MIN_SEGMENT_DURATION_MS;

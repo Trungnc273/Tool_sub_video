@@ -683,10 +683,18 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   // Smoothly update playhead position during active video playback at 60 FPS
   useEffect(() => {
     let animId: number
+    let lastOverlayUpdate = 0
     const updatePlayhead = () => {
       if (videoRef.current && !videoRef.current.paused && duration > 0) {
         const ms = Math.floor(videoRef.current.currentTime * 1000)
         const pct = ms / duration
+        // Sự kiện timeupdate của <video> chỉ bắn ~4 lần/giây khiến phụ đề preview hiện
+        // trễ tới 250ms — cập nhật currentTime ở ~12fps tại đây để overlay bám sát lời nói
+        const now = performance.now()
+        if (now - lastOverlayUpdate > 80) {
+          lastOverlayUpdate = now
+          setCurrentTime(ms)
+        }
         if (playheadRef.current) {
           playheadRef.current.style.left = `calc(20px + ${pct * 100}% - ${pct * 40}px)`
         }
