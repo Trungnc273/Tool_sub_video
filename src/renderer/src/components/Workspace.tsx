@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import { Project } from './Dashboard'
 import { AppSettings } from './Settings'
-import { parseSRT, stringifySRT, stringifyTxt, formatTime, SubtitleSegment, splitSegmentsBySentences } from '../utils/srt'
+import { parseSRT, stringifySRT, stringifyTxt, formatTime, SubtitleSegment, splitSegmentsBySentences, buildSegmentsFromWords } from '../utils/srt'
 
 function fixUtf8Garbage(str: string): string {
   if (!str) return ''
@@ -2368,7 +2368,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
         prompt = 'Hello. Welcome back. Let us split the transcription into short sentences with proper punctuation.'
       }
 
-      const srtResult = await window.api.callWhisperApi({
+      const asrResult = await window.api.callWhisperApi({
         apiKey: settings.apiKey,
         baseUrl: settings.baseUrl,
         audioPath: project.audioPath,
@@ -2379,8 +2379,16 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
       setProgress(90)
       setStatusMessage('Đang tải phụ đề...')
 
-      const parsed = parseSRT(srtResult)
-      const splitParsed = splitSegmentsBySentences(parsed)
+      // Ưu tiên mốc thời gian từng từ (khớp lời nói thật); fallback tách theo tỷ lệ chữ
+      let splitParsed: SubtitleSegment[]
+      if (typeof asrResult === 'string') {
+        // Backend tùy chỉnh (baseUrl khác) có thể vẫn trả chuỗi SRT kiểu cũ
+        splitParsed = splitSegmentsBySentences(parseSRT(asrResult))
+      } else if (asrResult.segments && asrResult.segments.length > 0) {
+        splitParsed = buildSegmentsFromWords(asrResult.words || [], asrResult.segments)
+      } else {
+        throw new Error('Whisper không trả về phụ đề nào.')
+      }
       saveSubtitleChanges(splitParsed)
       setProgress(100)
       alert('Nhận diện giọng nói hoàn tất!')
@@ -2407,56 +2415,88 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     setProgress(0)
     setStatusMessage('Đang chuẩn bị dịch thuật...')
 
-    try {
-      const batchSize = 25
-      const totalBatches = Math.ceil(segments.length / batchSize)
-      const updatedSegments = [...segments]
+    // Dịch 1 lô câu, trả về map index -> bản dịch. Format "số|câu" tiết kiệm token so với JSON.
+    const translateBatch = async (
+      batch: SubtitleSegment[]
+    ): Promise<Map<number, string>> => {
+      const lines = batch.map((b) => `${b.index}|${b.text.replace(/\n/g, ' ')}`).join('\n')
+      const messages = [
+        { role: 'system', content: settings.systemPrompt },
+        {
+          role: 'user',
+          content: `${settings.characterContext ? `Xưng hô: ${settings.characterContext}\n` : ''}${settings.nameDictionary ? `Từ điển bắt buộc:\n${settings.nameDictionary}\n` : ''}Dịch sang tiếng Việt. Trả về đúng số dòng, mỗi dòng dạng "số|bản dịch", không thêm gì khác.
 
-      for (let i = 0; i < segments.length; i += batchSize) {
-        const batch = segments.slice(i, i + batchSize)
+${lines}`
+        }
+      ]
+
+      const resText = await window.api.callGptApi({
+        apiKey: settings.apiKey,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        messages
+      })
+
+      const translations = new Map<number, string>()
+      for (const line of resText.split('\n')) {
+        const m = line.match(/^\s*(\d+)\s*\|(.*)$/)
+        if (m) {
+          const idx = parseInt(m[1], 10)
+          const translated = m[2].trim()
+          if (translated) translations.set(idx, translated)
+        }
+      }
+      return translations
+    }
+
+    try {
+      // Chỉ dịch câu chưa có bản dịch (tiết kiệm token khi dịch tiếp/dịch bổ sung);
+      // nếu tất cả đã dịch rồi thì hiểu là muốn dịch lại toàn bộ
+      const untranslated = segments.filter((s) => !(s.translatedText || '').trim())
+      const toTranslate = untranslated.length > 0 ? untranslated : segments
+
+      const batchSize = 50
+      const totalBatches = Math.ceil(toTranslate.length / batchSize)
+      const updatedSegments = [...segments]
+      const failedIndexes: number[] = []
+
+      for (let i = 0; i < toTranslate.length; i += batchSize) {
         const batchIdx = Math.floor(i / batchSize) + 1
         setStatusMessage(`Đang dịch đoạn phụ đề ${batchIdx}/${totalBatches}...`)
 
-        const messages = [
-          { role: 'system', content: settings.systemPrompt },
-          {
-            role: 'user',
-            content: `Translate the following JSON list of subtitle lines to Vietnamese.
-${settings.characterContext ? `Character context and pronoun guidelines to follow: ${settings.characterContext}\n` : ''}
-${settings.nameDictionary ? `Strict translation vocabulary mapping/name dictionary rules (translate these specific terms exactly as mapped):
-${settings.nameDictionary}\n` : ''}
-Return ONLY a valid JSON array of objects with the exact same keys: "index" and "translatedText".
-Do not include any other markdown code block wrapper or text except the JSON array.
-
-Input JSON:
-${JSON.stringify(batch.map((b) => ({ index: b.index, text: b.text })))}`
-          }
-        ]
-
-        const resText = await window.api.callGptApi({
-          apiKey: settings.apiKey,
-          baseUrl: settings.baseUrl,
-          model: settings.model,
-          messages
-        })
-
-        // Clean any potential markdown wrappers
-        const cleaned = resText.replace(/```json/g, '').replace(/```/g, '').trim()
-        const translatedList = JSON.parse(cleaned)
-
-        // Map translations back
-        for (const item of translatedList) {
-          const seg = updatedSegments.find((s) => s.index === item.index)
-          if (seg) {
-            seg.translatedText = item.translatedText
+        // Retry tối đa 2 lần cho các câu còn thiếu; lô hỏng không chặn lô sau
+        let pending = toTranslate.slice(i, i + batchSize)
+        for (let attempt = 0; attempt <= 2 && pending.length > 0; attempt++) {
+          try {
+            const translations = await translateBatch(pending)
+            pending = pending.filter((seg) => {
+              const translated = translations.get(seg.index)
+              if (translated) {
+                const target = updatedSegments.find((s) => s.index === seg.index)
+                if (target) target.translatedText = translated
+                return false
+              }
+              return true
+            })
+          } catch (err) {
+            console.error(`[Dịch] Lô ${batchIdx} lần thử ${attempt + 1} lỗi:`, err)
           }
         }
+        failedIndexes.push(...pending.map((s) => s.index))
 
         setProgress(Math.round((batchIdx / totalBatches) * 100))
       }
 
       saveSubtitleChanges(updatedSegments)
-      alert('Dịch thuật hoàn tất!')
+      if (failedIndexes.length > 0) {
+        alert(
+          `Dịch xong ${toTranslate.length - failedIndexes.length}/${toTranslate.length} câu.\n` +
+            `${failedIndexes.length} câu chưa dịch được (dòng: ${failedIndexes.slice(0, 10).join(', ')}${failedIndexes.length > 10 ? '...' : ''}).\n` +
+            `Bấm "Dịch AI" lần nữa để dịch tiếp các câu còn thiếu.`
+        )
+      } else {
+        alert('Dịch thuật hoàn tất!')
+      }
     } catch (err: any) {
       console.error(err)
       alert('Lỗi dịch thuật: ' + err.message)

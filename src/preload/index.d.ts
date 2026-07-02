@@ -56,7 +56,11 @@ declare global {
         audioPath: string
         language?: string
         prompt?: string
-      }) => Promise<string>
+      }) => Promise<{
+        text: string
+        words: { word: string; start: number; end: number }[]
+        segments: { start: number; end: number; text: string }[]
+      }>
       callGptApi: (params: {
         apiKey: string
         baseUrl?: string

@@ -104,6 +104,111 @@ export function stringifyTxt(segments: SubtitleSegment[], useTranslation: boolea
     .join('\n');
 }
 
+// --- Word-level timestamp support (Whisper verbose_json) ---
+
+export interface WhisperWord {
+  word: string;
+  start: number; // seconds
+  end: number; // seconds
+}
+
+export interface WhisperSegmentRaw {
+  start: number; // seconds
+  end: number; // seconds
+  text: string;
+}
+
+const MIN_SEGMENT_DURATION_MS = 300;
+
+// Chỉ giữ chữ/số (mọi ngôn ngữ) để so khớp từ với câu — bỏ dấu câu, khoảng trắng
+function normalizeForMatch(s: string): string {
+  return s.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+}
+
+/**
+ * Ghép words (mốc thời gian thật từng từ) với segments (văn bản có dấu câu) để tạo
+ * phụ đề tách theo câu, mốc start/end lấy từ từ đầu/cuối câu — không nội suy độ dài chữ.
+ * Fallback: thiếu words → tách theo tỷ lệ chữ như cũ (splitSegmentsBySentences).
+ */
+export function buildSegmentsFromWords(
+  words: WhisperWord[],
+  rawSegments: WhisperSegmentRaw[]
+): SubtitleSegment[] {
+  const baseSegments: SubtitleSegment[] = rawSegments.map((s, i) => ({
+    id: uuid(),
+    index: i + 1,
+    start: Math.round(s.start * 1000),
+    end: Math.round(s.end * 1000),
+    originalStart: Math.round(s.start * 1000),
+    originalEnd: Math.round(s.end * 1000),
+    text: s.text.trim(),
+    translatedText: ''
+  }));
+
+  if (!words || words.length === 0) {
+    return splitSegmentsBySentences(baseSegments);
+  }
+
+  const result: SubtitleSegment[] = [];
+  let wordIdx = 0;
+  let newIndex = 1;
+
+  for (const seg of baseSegments) {
+    // Tái dùng quy tắc tách câu hiện có (dấu câu chính, rồi phẩy nếu câu dài)
+    const sentences = splitSegment(seg).map((s) => s.text);
+
+    for (const sentence of sentences) {
+      const target = normalizeForMatch(sentence);
+      if (!target) continue;
+
+      // Tiêu thụ words cho tới khi đủ ký tự của câu
+      let consumed = '';
+      const startWordIdx = wordIdx;
+      while (wordIdx < words.length && consumed.length < target.length) {
+        consumed += normalizeForMatch(words[wordIdx].word);
+        wordIdx++;
+      }
+
+      let startMs: number;
+      let endMs: number;
+      if (wordIdx > startWordIdx) {
+        startMs = Math.round(words[startWordIdx].start * 1000);
+        endMs = Math.round(words[wordIdx - 1].end * 1000);
+      } else {
+        // Hết words (lệch dữ liệu) — dùng mốc của segment gốc
+        startMs = seg.start;
+        endMs = seg.end;
+      }
+
+      if (endMs - startMs < MIN_SEGMENT_DURATION_MS) {
+        endMs = startMs + MIN_SEGMENT_DURATION_MS;
+      }
+
+      // Chống chồng lấn với câu trước
+      const prev = result[result.length - 1];
+      if (prev && startMs < prev.end) {
+        startMs = prev.end;
+        if (endMs - startMs < MIN_SEGMENT_DURATION_MS) {
+          endMs = startMs + MIN_SEGMENT_DURATION_MS;
+        }
+      }
+
+      result.push({
+        id: uuid(),
+        index: newIndex++,
+        start: startMs,
+        end: endMs,
+        originalStart: startMs,
+        originalEnd: endMs,
+        text: sentence,
+        translatedText: ''
+      });
+    }
+  }
+
+  return result;
+}
+
 export function splitSegmentsBySentences(segments: SubtitleSegment[]): SubtitleSegment[] {
   const result: SubtitleSegment[] = [];
   let newIndex = 1;

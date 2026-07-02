@@ -924,7 +924,11 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
     const formData = new FormData()
     formData.append('file', file)
     formData.append('model', 'whisper-1')
-    formData.append('response_format', 'srt')
+    // verbose_json + word granularity: mốc thời gian từng từ để phụ đề khớp lời nói.
+    // Whisper tính phí theo phút audio nên không tăng chi phí.
+    formData.append('response_format', 'verbose_json')
+    formData.append('timestamp_granularities[]', 'word')
+    formData.append('timestamp_granularities[]', 'segment')
     if (language) {
       formData.append('language', language)
     }
@@ -948,7 +952,20 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
     }
 
     const arrayBuf = await response.arrayBuffer()
-    return new TextDecoder('utf-8').decode(arrayBuf)
+    const raw = new TextDecoder('utf-8').decode(arrayBuf)
+    const json = JSON.parse(raw)
+    // Chỉ trả các field cần thiết (payload gọn qua IPC)
+    return {
+      text: json.text || '',
+      words: Array.isArray(json.words) ? json.words : [],
+      segments: Array.isArray(json.segments)
+        ? json.segments.map((s: { start: number; end: number; text: string }) => ({
+            start: s.start,
+            end: s.end,
+            text: s.text
+          }))
+        : []
+    }
   })
 
   // 6. Call OpenAI GPT API for Translation
