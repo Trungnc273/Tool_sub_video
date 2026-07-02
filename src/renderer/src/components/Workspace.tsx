@@ -3234,8 +3234,8 @@ ${lines}`
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Vị trí dọc: {settings.subtitleStyle?.posY !== undefined ? settings.subtitleStyle.posY : 12}%</span>
                 <input
                   type="range"
-                  min={5}
-                  max={80}
+                  min={0}
+                  max={95}
                   step={1}
                   style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
                   value={settings.subtitleStyle?.posY !== undefined ? settings.subtitleStyle.posY : 12}
@@ -3246,8 +3246,8 @@ ${lines}`
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Vị trí ngang: {settings.subtitleStyle?.posX !== undefined ? settings.subtitleStyle.posX : 50}%</span>
                 <input
                   type="range"
-                  min={5}
-                  max={95}
+                  min={0}
+                  max={100}
                   step={1}
                   style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
                   value={settings.subtitleStyle?.posX !== undefined ? settings.subtitleStyle.posX : 50}
@@ -4094,8 +4094,9 @@ ${lines}`
                         let newY = settings.subtitleStyle?.posY !== undefined ? settings.subtitleStyle.posY : 12
                         el.style.cursor = 'grabbing'
                         const onMove = (me: MouseEvent): void => {
-                          newX = Math.round(Math.min(95, Math.max(5, ((me.clientX - rect.left) / rect.width) * 100)))
-                          newY = Math.round(Math.min(80, Math.max(5, (1 - (me.clientY - rect.top) / rect.height) * 100)))
+                          // Chỉ giữ trong khung hình (0-100), không giới hạn thêm
+                          newX = Math.round(Math.min(100, Math.max(0, ((me.clientX - rect.left) / rect.width) * 100)))
+                          newY = Math.round(Math.min(95, Math.max(0, (1 - (me.clientY - rect.top) / rect.height) * 100)))
                           el.style.left = `${newX}%`
                           el.style.bottom = `${newY}%`
                         }
