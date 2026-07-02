@@ -454,6 +454,11 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   setTtsVolume
 }) => {
   const [segments, setSegments] = useState<SubtitleSegment[]>([])
+  // Ref cho vòng lặp rAF đọc segments mà không cần re-subscribe effect
+  const segmentsRef = useRef<SubtitleSegment[]>([])
+  useEffect(() => {
+    segmentsRef.current = segments
+  }, [segments])
   const [activeSegId, setActiveSegId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; segId: string } | null>(null)
   const undoStack = useRef<SubtitleSegment[][]>([])
@@ -688,12 +693,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({
       if (videoRef.current && !videoRef.current.paused && duration > 0) {
         const ms = Math.floor(videoRef.current.currentTime * 1000)
         const pct = ms / duration
-        // Sự kiện timeupdate của <video> chỉ bắn ~4 lần/giây khiến phụ đề preview hiện
-        // trễ tới 250ms — cập nhật currentTime ở ~12fps tại đây để overlay bám sát lời nói
+        // Sự kiện timeupdate của <video> chỉ bắn ~4 lần/giây khiến phụ đề preview trễ tới
+        // 250ms. Cập nhật overlay TRỰC TIẾP trên DOM tại đây (60fps) — không setCurrentTime
+        // liên tục vì mỗi lần là cả component lớn re-render, gây lag.
         const now = performance.now()
-        if (now - lastOverlayUpdate > 80) {
+        if (now - lastOverlayUpdate > 50) {
           lastOverlayUpdate = now
-          setCurrentTime(ms)
+          const overlay = document.getElementById('subtitle-preview-overlay')
+          if (overlay) {
+            const active = segmentsRef.current.find(
+              (s) => ms >= s.start + audioOffset && ms <= s.end + audioOffset
+            )
+            const span = overlay.firstElementChild as HTMLElement | null
+            if (active) {
+              const text = active.translatedText || active.text
+              if (span && span.textContent !== text) span.textContent = text
+              overlay.style.display = ''
+            } else {
+              overlay.style.display = 'none'
+            }
+          }
         }
         if (playheadRef.current) {
           playheadRef.current.style.left = `calc(20px + ${pct * 100}% - ${pct * 40}px)`
@@ -729,7 +748,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
         cancelAnimationFrame(animId)
       }
     }
-  }, [isPlaying, duration])
+  }, [isPlaying, duration, audioOffset])
 
   const [enableTts, setEnableTts] = useState(false)
   const [videoRect, setVideoRect] = useState({ left: 0, top: 0, width: 0, height: 0 })
@@ -4050,8 +4069,8 @@ ${lines}`
                     return currentTime >= (segStart + audioOffset) && currentTime <= (segEnd + audioOffset)
                   })
 
-                  if (!activeSegment) return null
-
+                  // Luôn render container (ẩn khi không có câu active) để vòng lặp rAF
+                  // cập nhật chữ trực tiếp trên DOM khi phát video — không re-render React
                   const scale = videoRect.height ? videoRect.height / 720 : 1;
                   const fontSize = Math.round((settings.subtitleStyle?.fontSize || 24) * scale);
                   const oW = (settings.subtitleStyle?.outlineWidth || 2) * scale;
@@ -4063,6 +4082,7 @@ ${lines}`
 
                   return (
                     <div
+                      id="subtitle-preview-overlay"
                       title="Kéo để đổi vị trí phụ đề"
                       style={{
                         position: 'absolute',
@@ -4077,6 +4097,7 @@ ${lines}`
                         wordBreak: 'break-word',
                         zIndex: 2,
                         cursor: 'grab',
+                        display: activeSegment ? undefined : 'none',
                         // Cha (bounding container) đặt pointerEvents:none để chuột xuyên
                         // xuống video — bật lại riêng cho dòng phụ đề để kéo-thả được
                         pointerEvents: 'auto'
@@ -4114,7 +4135,7 @@ ${lines}`
                       }}
                     >
                       <span
-                        id={`subtitle-preview-text-${activeSegment.id}`}
+                        id={activeSegment ? `subtitle-preview-text-${activeSegment.id}` : 'subtitle-preview-text-none'}
                         style={{
                           fontFamily: 'Arial',
                           fontSize: `${fontSize}px`,
@@ -4137,7 +4158,7 @@ ${lines}`
                           ` : 'none'
                         }}
                       >
-                        {activeSegment.translatedText || activeSegment.text}
+                        {activeSegment ? activeSegment.translatedText || activeSegment.text : ''}
                       </span>
                     </div>
                   );
