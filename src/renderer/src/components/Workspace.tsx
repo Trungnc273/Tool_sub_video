@@ -4076,7 +4076,10 @@ ${lines}`
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                         zIndex: 2,
-                        cursor: 'grab'
+                        cursor: 'grab',
+                        // Cha (bounding container) đặt pointerEvents:none để chuột xuyên
+                        // xuống video — bật lại riêng cho dòng phụ đề để kéo-thả được
+                        pointerEvents: 'auto'
                       }}
                       onMouseDown={(e) => {
                         // Kéo-thả vị trí phụ đề: cập nhật DOM trực tiếp khi kéo (mượt),
