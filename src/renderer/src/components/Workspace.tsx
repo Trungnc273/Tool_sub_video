@@ -3256,6 +3256,42 @@ ${lines}`
               </div>
             </div>
 
+            {/* Màu chữ / màu viền / độ dày viền — cùng nguồn settings.subtitleStyle với tab Cài đặt */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Màu chữ</span>
+                <input
+                  type="color"
+                  value={settings.subtitleStyle?.color || '#ffffff'}
+                  onChange={(e) => handleStyleChange('color', e.target.value)}
+                  style={{ width: '100%', height: '28px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', cursor: 'pointer', padding: '2px' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Màu viền</span>
+                <input
+                  type="color"
+                  value={settings.subtitleStyle?.outlineColor || '#000000'}
+                  onChange={(e) => handleStyleChange('outlineColor', e.target.value)}
+                  style={{ width: '100%', height: '28px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', cursor: 'pointer', padding: '2px' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  Độ dày viền: {settings.subtitleStyle?.outlineWidth !== undefined ? settings.subtitleStyle.outlineWidth : 2}px
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={8}
+                  step={1}
+                  style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px', marginTop: '10px' }}
+                  value={settings.subtitleStyle?.outlineWidth !== undefined ? settings.subtitleStyle.outlineWidth : 2}
+                  onChange={(e) => handleStyleChange('outlineWidth', parseInt(e.target.value))}
+                />
+              </div>
+            </div>
+
             {/* Dải nền che phụ đề gốc controls */}
             <div
               style={{
@@ -4027,6 +4063,7 @@ ${lines}`
 
                   return (
                     <div
+                      title="Kéo để đổi vị trí phụ đề"
                       style={{
                         position: 'absolute',
                         bottom: `${settings.subtitleStyle?.posY !== undefined ? settings.subtitleStyle.posY : 12}%`,
@@ -4038,7 +4075,38 @@ ${lines}`
                         boxSizing: 'border-box',
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
-                        zIndex: 2
+                        zIndex: 2,
+                        cursor: 'grab'
+                      }}
+                      onMouseDown={(e) => {
+                        // Kéo-thả vị trí phụ đề: cập nhật DOM trực tiếp khi kéo (mượt),
+                        // chỉ lưu settings 1 lần lúc thả chuột (tránh spam ghi settings/IPC)
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const el = e.currentTarget as HTMLDivElement
+                        const container = el.parentElement
+                        if (!container) return
+                        const rect = container.getBoundingClientRect()
+                        let newX = settings.subtitleStyle?.posX !== undefined ? settings.subtitleStyle.posX : 50
+                        let newY = settings.subtitleStyle?.posY !== undefined ? settings.subtitleStyle.posY : 12
+                        el.style.cursor = 'grabbing'
+                        const onMove = (me: MouseEvent): void => {
+                          newX = Math.round(Math.min(95, Math.max(5, ((me.clientX - rect.left) / rect.width) * 100)))
+                          newY = Math.round(Math.min(80, Math.max(5, (1 - (me.clientY - rect.top) / rect.height) * 100)))
+                          el.style.left = `${newX}%`
+                          el.style.bottom = `${newY}%`
+                        }
+                        const onUp = (): void => {
+                          window.removeEventListener('mousemove', onMove)
+                          window.removeEventListener('mouseup', onUp)
+                          el.style.cursor = 'grab'
+                          onChangeSettings({
+                            ...settings,
+                            subtitleStyle: { ...settings.subtitleStyle, posX: newX, posY: newY }
+                          })
+                        }
+                        window.addEventListener('mousemove', onMove)
+                        window.addEventListener('mouseup', onUp)
                       }}
                     >
                       <span
