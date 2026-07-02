@@ -1,0 +1,21 @@
+# File/thư mục AI không nên đọc — tránh nhiễu ngữ cảnh, tiết kiệm token
+# Tương tự .gitignore nhưng dành riêng cho phạm vi đọc của AI
+
+node_modules/
+dist/
+out/
+build/
+.eslintcache
+*.log*
+package-lock.json
+resources/*.png
+resources/*.ico
+resources/*.icns
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.mp3
+*.wav
+*.srt
+*.ass

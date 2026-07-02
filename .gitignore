@@ -1,0 +1,10 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+
+# Secrets / local dev env — không bao giờ commit
+.env
+.env.*
