@@ -50,6 +50,10 @@ const api = {
     ipcRenderer.invoke('get-tts-audio', params),
   extractEmbeddedSubtitles: (videoPath: string) =>
     ipcRenderer.invoke('extract-embedded-subtitles', videoPath),
+  saveSecureSetting: (key: string, value: string) =>
+    ipcRenderer.invoke('save-secure-setting', key, value),
+  loadSecureSetting: (key: string) => ipcRenderer.invoke('load-secure-setting', key),
+  isEncryptionAvailable: () => ipcRenderer.invoke('is-encryption-available'),
   onFfmpegProgress: (callback: (data: { type: string; percent: number }) => void) => {
     const subscription = (_event, data) => callback(data)
     ipcRenderer.on('ffmpeg-progress', subscription)

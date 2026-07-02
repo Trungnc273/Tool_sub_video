@@ -24,22 +24,45 @@ function App(): React.JSX.Element {
       }
     }
 
-    const savedSettings = localStorage.getItem('vietsub_settings')
-    if (savedSettings) {
-      try {
-        const parsed = JSON.parse(savedSettings)
-        setSettings({
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          subtitleStyle: {
-            ...DEFAULT_SETTINGS.subtitleStyle,
-            ...(parsed.subtitleStyle || {})
+    const loadSettings = async (): Promise<void> => {
+      let merged = { ...DEFAULT_SETTINGS }
+      const savedSettings = localStorage.getItem('vietsub_settings')
+      if (savedSettings) {
+        try {
+          const parsed = JSON.parse(savedSettings)
+          merged = {
+            ...DEFAULT_SETTINGS,
+            ...parsed,
+            subtitleStyle: {
+              ...DEFAULT_SETTINGS.subtitleStyle,
+              ...(parsed.subtitleStyle || {})
+            }
           }
-        })
-      } catch (e) {
-        console.error(e)
+          // Dọn key plaintext còn sót từ phiên bản cũ (trước khi có safeStorage)
+          if (parsed.apiKey || parsed.elevenLabsApiKey) {
+            const rest = { ...parsed }
+            delete rest.apiKey
+            delete rest.elevenLabsApiKey
+            localStorage.setItem('vietsub_settings', JSON.stringify(rest))
+          }
+        } catch (e) {
+          console.error(e)
+        }
       }
+      try {
+        // API keys được lưu mã hóa riêng qua main process, không nằm trong localStorage
+        const [apiKey, elevenLabsApiKey] = await Promise.all([
+          window.api.loadSecureSetting('apiKey'),
+          window.api.loadSecureSetting('elevenLabsApiKey')
+        ])
+        if (apiKey) merged.apiKey = apiKey
+        if (elevenLabsApiKey) merged.elevenLabsApiKey = elevenLabsApiKey
+      } catch (e) {
+        console.error('Không đọc được key bảo mật:', e)
+      }
+      setSettings(merged)
     }
+    loadSettings()
   }, [])
 
   // Save projects to localStorage
@@ -49,9 +72,18 @@ function App(): React.JSX.Element {
   }
 
   // Handle saving current settings
+  // API keys đi qua kênh mã hóa của main process; phần còn lại vào localStorage như cũ
   const handleSaveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings)
-    localStorage.setItem('vietsub_settings', JSON.stringify(newSettings))
+    const { apiKey, elevenLabsApiKey, ...rest } = newSettings
+    localStorage.setItem('vietsub_settings', JSON.stringify(rest))
+    Promise.all([
+      window.api.saveSecureSetting('apiKey', apiKey || ''),
+      window.api.saveSecureSetting('elevenLabsApiKey', elevenLabsApiKey || '')
+    ]).catch((e) => {
+      console.error('Không lưu được key bảo mật:', e)
+      alert('Không lưu được API key một cách an toàn. Vui lòng thử lại.')
+    })
   }
 
   // Handle select project

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, protocol, safeStorage } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -9,6 +9,22 @@ import * as https from 'https'
 import * as http from 'http'
 import { URL } from 'url'
 import { Communicate } from 'edge-tts-ts'
+import ffmpegStaticPath from 'ffmpeg-static'
+import { existsSync } from 'fs'
+
+// FFmpeg được bundle qua ffmpeg-static; khi đóng gói asar, binary nằm ở app.asar.unpacked
+const ffmpegPath = (ffmpegStaticPath as unknown as string).replace(
+  'app.asar',
+  'app.asar.unpacked'
+)
+
+function assertFfmpegAvailable(): void {
+  if (!ffmpegPath || !existsSync(ffmpegPath)) {
+    throw new Error(
+      'Không tìm thấy công cụ xử lý video (FFmpeg) đi kèm ứng dụng. Vui lòng cài đặt lại ứng dụng.'
+    )
+  }
+}
 
 
 // Register media scheme as privileged to bypass CSP and allow streaming
@@ -61,7 +77,7 @@ function durationToSeconds(durationStr: string): number {
 function getVideoDuration(videoPath: string): Promise<number> {
   return new Promise((resolve) => {
     try {
-      const ffmpeg = spawn('ffmpeg', ['-i', videoPath])
+      const ffmpeg = spawn(ffmpegPath, ['-i', videoPath])
       let output = ''
       ffmpeg.stderr.on('data', (data) => {
         output += data.toString()
@@ -101,8 +117,65 @@ function getSegmentSpeechSpeed(text: string, durationS: number, baseSpeed: numbe
   return parseFloat(targetSpeed.toFixed(2))
 }
 
+// --- Secure settings storage (API keys) ---
+// Keys are encrypted with OS-level encryption (DPAPI on Windows) via safeStorage,
+// stored as base64 in userData/secure-settings.json. Never log decrypted values.
+const SECURE_SETTINGS_FILE = (): string => path.join(app.getPath('userData'), 'secure-settings.json')
+const ALLOWED_SECURE_KEYS = ['apiKey', 'elevenLabsApiKey']
+
+async function readSecureFile(): Promise<Record<string, string>> {
+  try {
+    const raw = await fs.readFile(SECURE_SETTINGS_FILE(), 'utf-8')
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+}
+
+function registerSecureSettingHandlers(): void {
+  ipcMain.handle('save-secure-setting', async (_, key: string, value: string) => {
+    if (!ALLOWED_SECURE_KEYS.includes(key)) {
+      throw new Error(`Không hỗ trợ lưu bảo mật cho khóa: ${key}`)
+    }
+    const store = await readSecureFile()
+    if (!value) {
+      delete store[key]
+    } else if (safeStorage.isEncryptionAvailable()) {
+      store[key] = 'enc:' + safeStorage.encryptString(value).toString('base64')
+    } else {
+      // FR4: fallback plaintext — renderer đã cảnh báo người dùng trước khi gọi
+      store[key] = 'plain:' + Buffer.from(value, 'utf-8').toString('base64')
+    }
+    await fs.writeFile(SECURE_SETTINGS_FILE(), JSON.stringify(store), 'utf-8')
+    return true
+  })
+
+  ipcMain.handle('load-secure-setting', async (_, key: string) => {
+    if (!ALLOWED_SECURE_KEYS.includes(key)) return ''
+    const store = await readSecureFile()
+    const stored = store[key]
+    if (!stored) return ''
+    try {
+      if (stored.startsWith('enc:')) {
+        return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+      }
+      if (stored.startsWith('plain:')) {
+        return Buffer.from(stored.slice(6), 'base64').toString('utf-8')
+      }
+      return ''
+    } catch {
+      // File hỏng hoặc copy từ máy khác — coi như chưa có key, không crash (SPEC mục 6)
+      console.error(`[secure-setting] Không giải mã được khóa ${key} (không log giá trị)`)
+      return ''
+    }
+  })
+
+  ipcMain.handle('is-encryption-available', () => safeStorage.isEncryptionAvailable())
+}
+
 // Register IPC Handlers
 function registerIpcHandlers(): void {
+  registerSecureSettingHandlers()
   // 1. Select Video
   ipcMain.handle('select-video', async () => {
     const result = await dialog.showOpenDialog({
@@ -121,6 +194,7 @@ function registerIpcHandlers(): void {
 
   // 2. Extract Audio
   ipcMain.handle('extract-audio', async (event, videoPath, outputPath) => {
+    assertFfmpegAvailable()
     const duration = await getVideoDuration(videoPath)
     
     const standardBitrates = [16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128]
@@ -139,7 +213,7 @@ function registerIpcHandlers(): void {
 
     return new Promise((resolve, reject) => {
       // Output low-bitrate MP3 for Whisper optimization
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(ffmpegPath, [
         '-i',
         videoPath,
         '-vn',
@@ -375,6 +449,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
 
   // 3. Burn Subtitles (Hardsub & Optional TTS Mix)
   ipcMain.handle('burn-subtitles', async (event, videoPath, assContent, outputPath, options) => {
+    assertFfmpegAvailable()
     const outputDir = path.dirname(outputPath)
     const tempAssPath = path.join(outputDir, `temp_${Date.now()}.ass`)
     const tempAssName = path.basename(tempAssPath)
@@ -582,7 +657,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
           ffmpegArgs = [...seekArgs, '-i', videoPath, '-vf', vfValue, outputPath, '-y']
         }
 
-        const ffmpeg = spawn('ffmpeg', ffmpegArgs, { cwd: outputDir })
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { cwd: outputDir })
 
         let duration = 0
         ffmpeg.stderr.on('data', (data) => {
@@ -646,6 +721,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
 
   // 3b. Export Dubbed Audio (Concatenated & delayed TTS MP3s)
   ipcMain.handle('export-dubbed-audio', async (event, outputPath, segments, options) => {
+    assertFfmpegAvailable()
     const outputDir = path.dirname(outputPath)
     const ttsTempDir = path.join(outputDir, `tts_temp_audio_${Date.now()}`)
     const createdTempPaths: string[] = []
@@ -772,7 +848,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
           '-y'
         ]
 
-        const ffmpeg = spawn('ffmpeg', ffmpegArgs, { cwd: outputDir })
+        const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { cwd: outputDir })
 
         const cleanUpTemp = async () => {
           for (const p of createdTempPaths) {
@@ -997,9 +1073,10 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
 
   // 12. Extract Embedded Subtitles from Video using FFmpeg
   ipcMain.handle('extract-embedded-subtitles', async (_, videoPath) => {
+    assertFfmpegAvailable()
     const tempSrtPath = videoPath.substring(0, videoPath.lastIndexOf('.')) + `_extracted_subs_${Date.now()}.srt`
     return new Promise((resolve, reject) => {
-      const ffmpeg = spawn('ffmpeg', [
+      const ffmpeg = spawn(ffmpegPath, [
         '-i',
         videoPath,
         '-map',
@@ -1034,6 +1111,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
 
   // 13. Reverse Video (Phát ngược)
   ipcMain.handle('reverse-video', async (event, videoPath, outputPath) => {
+    assertFfmpegAvailable()
     const outputDir = path.dirname(outputPath)
     return new Promise((resolve, reject) => {
       // ffmpeg -i input.mp4 -vf reverse -af areverse -preset superfast output.mp4
@@ -1047,7 +1125,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
         '-y'
       ]
 
-      const ffmpeg = spawn('ffmpeg', ffmpegArgs, { cwd: outputDir })
+      const ffmpeg = spawn(ffmpegPath, ffmpegArgs, { cwd: outputDir })
       
       let duration = 0
       ffmpeg.stderr.on('data', (data) => {
