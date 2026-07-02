@@ -37,4 +37,15 @@
 
 - [x] **V1.** `grep -ri "sk-proj\|sk_[0-9a-f]" src/` không ra key thật.
 - [x] **V2.** `npm run typecheck` + `npm run lint` pass, không lỗi mới.
-- [ ] **V3.** Chạy app thật: tạo project, tách audio (FFmpeg bundle), lưu/đọc key sau restart.
+- [x] **V3a.** (AI test, 2026-07-02) Test kỹ thuật từng thành phần với video mẫu 10s:
+  - Key lưu qua Settings UI → file `secure-settings.json` chỉ chứa chuỗi mã hóa `enc:...`,
+    không đọc được key; localStorage không còn key plaintext. ✅
+  - FFmpeg bundle: tạo video, tách audio (đúng args app), reverse, **hardsub với libass**
+    (xác minh bằng ảnh frame — phụ đề hiện đúng), trộn TTS + hardsub 1 lệnh filter_complex. ✅
+  - API: Whisper ASR OK (HTTP 200, trả SRT), GPT dịch OK (trả đúng JSON tiếng Việt),
+    OpenAI TTS OK, Edge TTS OK (19KB audio tiếng Việt). ✅
+  - ⚠️ ElevenLabs key trong .env bị 401 (key không còn hiệu lực) — cần key mới nếu muốn
+    dùng giọng ElevenLabs; không phải lỗi app.
+  - Đường lỗi: video không có phụ đề nhúng → FFmpeg fail đúng cách, app sẽ báo lỗi rõ. ✅
+- [ ] **V3b.** (Người dùng test) Thao tác UI thật: tạo project với video thật, chạy ASR,
+  dịch, lồng tiếng, xuất video end-to-end.
