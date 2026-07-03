@@ -385,13 +385,21 @@ function callEdgeTtsOnce(text: string, voice: string, speed?: number): Promise<B
       
       const communicate = new Communicate(cleanText, { voice: ttsVoice, rate: rateStr })
       const chunks: Buffer[] = []
-      
-      const timeoutId = setTimeout(() => {
-        reject(new Error('Edge TTS connection timed out (6s)'))
-      }, 6000)
-      
+
+      // Watchdog theo TIẾN ĐỘ: chỉ hủy khi 10s không nhận thêm dữ liệu nào.
+      // (Trần cứng 6s cũ hủy oan các câu dài đang sinh dở → câu bị bỏ, "đọc thiếu")
+      let timeoutId: NodeJS.Timeout | undefined
+      const resetWatchdog = (): void => {
+        if (timeoutId) clearTimeout(timeoutId)
+        timeoutId = setTimeout(() => {
+          reject(new Error('Edge TTS không phản hồi trong 10s'))
+        }, 10000)
+      }
+      resetWatchdog()
+
       try {
         for await (const chunk of communicate.stream()) {
+          resetWatchdog()
           if (chunk.type === 'audio') {
             chunks.push(Buffer.from(chunk.data))
           }
@@ -612,7 +620,7 @@ async function getOrSynthesizeTts(
 
             event.sender.send('ffmpeg-progress', { type: 'burn-subtitles', percent: 0 })
 
-            const baseSpeed = options?.speed || 1.15
+            const baseSpeed = options?.speed || 1.0
             const autoSpeed = !!options?.autoSpeed
             // Sinh (hoặc lấy cache) ở tốc độ gốc; khớp slot bằng atempo sau khi ĐO thời
             // lượng thật (spec 04 FR2) — không ước lượng đếm từ, không cắt cụt lời.
@@ -806,7 +814,7 @@ async function getOrSynthesizeTts(
 
         event.sender.send('ffmpeg-progress', { type: 'export-dubbed-audio', percent: 0 })
 
-        const baseSpeed = options?.speed || 1.15
+        const baseSpeed = options?.speed || 1.0
         const autoSpeed = !!options?.autoSpeed
         // Cùng cơ chế với burn-subtitles: cache dùng chung + đo thời lượng thật + atempo
         const readySegs: { seg: (typeof ttsSegments)[number]; filePath: string; fitTempo: number }[] = []

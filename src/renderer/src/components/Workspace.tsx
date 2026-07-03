@@ -764,27 +764,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   const [showSubSettingsPopover, setShowSubSettingsPopover] = useState(false)
   const [timeShiftValue, setTimeShiftValue] = useState<string>('0')
   const [isTtsGenerated, setIsTtsGenerated] = useState(false)
-  const [ttsSpeed, setTtsSpeed] = useState<number>(1.15)
+  // 1.0 = giọng tự nhiên, khớp nhịp nói nhân vật; nén tốc độ chỉ xảy ra khi câu
+  // dài hơn khoảng trống (đo thật + atempo ở main, spec 04)
+  const [ttsSpeed, setTtsSpeed] = useState<number>(1.0)
   const [autoSpeed, setAutoSpeed] = useState(true)
   const prevTimeRef = useRef<number>(0)
 
-  const estimateTextDuration = (text: string): number => {
-    const wordCount = text.split(/\s+/).filter(Boolean).length
-    return wordCount * 0.40 + 0.2
-  }
-
-  const getSegmentSpeechSpeed = (text: string, durationMs: number): number => {
-    if (!autoSpeed || durationMs <= 0) return ttsSpeed
-    const naturalDur = estimateTextDuration(text)
-    const durationS = durationMs / 1000
-    let targetSpeed = (naturalDur / durationS) * ttsSpeed
-    
-    // Clamp speed between 0.85 and 2.0 to ensure it sounds natural
-    if (targetSpeed < 0.85) targetSpeed = 0.85
-    if (targetSpeed > 2.0) targetSpeed = 2.0
-    
-    return parseFloat(targetSpeed.toFixed(2))
-  }
+  // (Đã bỏ bộ ước lượng tốc độ đếm-từ ở preview — mỗi câu một tốc độ ngẫu hứng làm
+  // preview khác video xuất và phá cache. Giờ mọi nơi sinh ở ttsSpeed thống nhất;
+  // nén-cho-vừa-slot do main đo thời lượng thật + atempo lúc xuất, spec 04)
 
   // Bulk Find and Replace State
   const [showBulkReplace, setShowBulkReplace] = useState(false)
@@ -1174,7 +1162,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     }
   }, [bgVolume, isMuted])
 
-  const playTtsAudio = async (text: string, durationMs?: number, startOffsetMs = 0) => {
+  const playTtsAudio = async (text: string, startOffsetMs = 0): Promise<void> => {
     if (activeAudioRef.current) {
       activeAudioRef.current.pause()
       activeAudioRef.current = null
@@ -1188,7 +1176,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     const cleanText = text.replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').trim()
     if (!cleanText) return
 
-    const speedToUse = durationMs !== undefined ? getSegmentSpeechSpeed(cleanText, durationMs) : ttsSpeed
+    const speedToUse = ttsSpeed
 
     try {
       const audioUrl = await window.api.getTtsAudio({
@@ -1217,7 +1205,9 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
         }
       })
 
-      const offsetSec = startOffsetMs / 1000
+      // Trễ nhỏ (<500ms) là do thời gian tải/sinh audio — phát từ ĐẦU câu để không
+      // nuốt chữ đầu; chỉ seek vào giữa khi người dùng thực sự tua vào giữa câu
+      const offsetSec = startOffsetMs > 500 ? startOffsetMs / 1000 : 0
       if (offsetSec > 0) {
         if (audio.readyState >= 1) {
           if (offsetSec < audio.duration) {
@@ -1319,7 +1309,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
 
           if (lastSpokenIdRef.current !== active.id) {
             lastSpokenIdRef.current = active.id
-            playTtsAudio(cleanText, active.end - active.start, expectedOffsetMs)
+            playTtsAudio(cleanText, expectedOffsetMs)
           } else {
             const audio = activeAudioRef.current
             if (audio) {
@@ -1334,14 +1324,16 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
               } else {
                 const expectedOffsetSec = expectedOffsetMs / 1000
                 const drift = Math.abs(audio.currentTime - expectedOffsetSec)
-                if (drift > 0.25) { // 250ms drift threshold
+                // Ngưỡng 800ms: trễ khởi phát ~500ms là chủ đích (không nuốt chữ đầu câu)
+                // — chỉ can thiệp khi lệch thật sự lớn (user tua video giữa câu)
+                if (drift > 0.8) {
                   if (expectedOffsetSec >= 0 && expectedOffsetSec < (audio.duration || 999)) {
                     audio.currentTime = expectedOffsetSec
                   }
                 }
               }
             } else {
-              playTtsAudio(cleanText, active.end - active.start, expectedOffsetMs)
+              playTtsAudio(cleanText, expectedOffsetMs)
             }
           }
         }
@@ -2612,7 +2604,7 @@ ${lines}`
         const text = seg.translatedText || ''
         const cleanText = text.replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').trim()
         try {
-          const speedToUse = getSegmentSpeechSpeed(cleanText, seg.end - seg.start)
+          const speedToUse = ttsSpeed
           await window.api.getTtsAudio({
             text: cleanText,
             voice: ttsVoice,
@@ -3962,7 +3954,7 @@ ${lines}`
                               if (videoRef.current && !videoRef.current.paused) {
                                 videoRef.current.pause()
                               }
-                              playTtsAudio(seg.translatedText || '', seg.end - seg.start)
+                              playTtsAudio(seg.translatedText || '')
                             }}
                             title="Nghe thử giọng thuyết minh AI câu này"
                           >
