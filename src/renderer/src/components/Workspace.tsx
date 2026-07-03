@@ -2384,24 +2384,51 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     setStatusMessage('Đang kết nối OpenAI Whisper API...')
 
     try {
-      let prompt: string | undefined = undefined
+      // Prompt mồi TRUNG TÍNH: chỉ làm mẫu ngắt câu/dấu câu, không chứa nội dung chủ đề
+      // (prompt có chủ đề cụ thể sẽ làm Whisper thiên vị từ vựng đó, nghe sai nội dung khác)
+      let prompt: string
       if (asrLanguage === 'zh') {
-        prompt = '来啦，兄弟们。先钓点白条。准备钓巨型盐鱼。先给他做个头部按摩，然后塞瓶子里面让她睡一觉。这样子做...'
+        prompt = '你好，欢迎收看。今天的内容开始了。请注意，句子要短，加上逗号和句号。'
       } else if (asrLanguage === 'en') {
-        prompt = 'Hello everyone, welcome back. Today, we are going to talk about subtitles. Let us split it into short sentences with proper commas and periods.'
+        prompt = 'Hello, welcome back. Here is the content, in short sentences, with commas and periods.'
       } else if (asrLanguage === 'vi') {
-        prompt = 'Xin chào mọi người. Hôm nay chúng ta sẽ làm phụ đề. Hãy ngắt thành các câu ngắn, có dấu phẩy và dấu chấm đầy đủ.'
+        prompt = 'Xin chào mọi người. Nội dung bắt đầu. Câu ngắn, có dấu phẩy và dấu chấm đầy đủ.'
       } else {
-        prompt = 'Hello. Welcome back. Let us split the transcription into short sentences with proper punctuation.'
+        prompt = 'Hello, welcome. Short sentences, with proper punctuation.'
       }
 
-      const asrResult = await window.api.callWhisperApi({
-        apiKey: settings.apiKey,
-        baseUrl: settings.baseUrl,
-        audioPath: project.audioPath,
-        language: asrLanguage || undefined,
-        prompt
+      // Bơm tên riêng từ Từ điển của người dùng vào prompt để Whisper nghe/viết đúng tên
+      // (lấy vế gốc của mỗi dòng "tên gốc = tên dịch", giới hạn ~120 ký tự)
+      if (settings.nameDictionary) {
+        const sourceNames = settings.nameDictionary
+          .split('\n')
+          .map((line) => line.split(/[=:：]/)[0].trim())
+          .filter(Boolean)
+          .join(', ')
+          .slice(0, 120)
+        if (sourceNames) prompt += ` ${sourceNames}.`
+      }
+
+      // Video dài (audio >24MB) được chia khúc ở main process — hiện tiến độ từng khúc
+      const cleanupProgress = window.api.onFfmpegProgress((data) => {
+        if (data.type === 'whisper-chunks') {
+          setProgress(10 + Math.round(data.percent * 0.8))
+          setStatusMessage(`Đang nhận diện giọng nói... ${data.percent}% (video dài, xử lý theo khúc)`)
+        }
       })
+
+      let asrResult: Awaited<ReturnType<typeof window.api.callWhisperApi>>
+      try {
+        asrResult = await window.api.callWhisperApi({
+          apiKey: settings.apiKey,
+          baseUrl: settings.baseUrl,
+          audioPath: project.audioPath,
+          language: asrLanguage || undefined,
+          prompt
+        })
+      } finally {
+        cleanupProgress()
+      }
 
       setProgress(90)
       setStatusMessage('Đang tải phụ đề...')

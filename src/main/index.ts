@@ -196,23 +196,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle('extract-audio', async (event, videoPath, outputPath) => {
     assertFfmpegAvailable()
     const duration = await getVideoDuration(videoPath)
-    
-    const standardBitrates = [16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128]
-    let bitrate = 64
-    if (duration > 0) {
-      const targetKbps = (23 * 1024 * 1024 * 8) / (duration * 1000)
-      const okBitrates = standardBitrates.filter(b => b <= targetKbps)
-      if (okBitrates.length > 0) {
-        bitrate = Math.max(...okBitrates)
-      } else {
-        bitrate = 16
-      }
-    }
-    
-    console.log(`[extract-audio] Calculated duration: ${duration}s, selected bitrate: ${bitrate}k for target size < 25MB`)
+
+    // Bitrate cố định 64k (điểm ngọt của Whisper) — KHÔNG hạ bitrate theo độ dài video
+    // nữa vì làm nát âm thanh, Whisper bỏ sót lời. File >24MB sẽ được chia khúc khi
+    // chuyển ngữ (xem call-whisper-api), nên không cần ép cả video vào 25MB.
+    console.log(`[extract-audio] duration: ${duration}s, bitrate 64k + speech filters`)
 
     return new Promise((resolve, reject) => {
-      // Output low-bitrate MP3 for Whisper optimization
       const ffmpeg = spawn(ffmpegPath, [
         '-i',
         videoPath,
@@ -221,8 +211,12 @@ function registerIpcHandlers(): void {
         '16000',
         '-ac',
         '1',
+        // Tăng cường giọng nói cho video nhiều nhạc nền/tạp âm:
+        // highpass 70Hz cắt ù/bass nhạc; loudnorm kéo giọng nói nhỏ lên đều
+        '-af',
+        'highpass=f=70,loudnorm=I=-16:TP=-1.5:LRA=11',
         '-ab',
-        `${bitrate}k`,
+        '64k',
         outputPath,
         '-y'
       ])
@@ -917,10 +911,20 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
     return result.filePath
   })
 
-  // 5. Call OpenAI Whisper API
-  ipcMain.handle('call-whisper-api', async (_, { apiKey, baseUrl, audioPath, language, prompt }) => {
-    const buffer = await fs.readFile(audioPath)
-    const file = new File([buffer], path.basename(audioPath), { type: 'audio/mp3' })
+  // 5. Call OpenAI Whisper API (tự chia khúc khi audio >24MB — video dài không giảm chất lượng)
+  const transcribeOnce = async (
+    apiKey: string,
+    baseUrl: string | undefined,
+    filePath: string,
+    language?: string,
+    prompt?: string
+  ): Promise<{
+    text: string
+    words: { word: string; start: number; end: number }[]
+    segments: { start: number; end: number; text: string }[]
+  }> => {
+    const buffer = await fs.readFile(filePath)
+    const file = new File([buffer], path.basename(filePath), { type: 'audio/mp3' })
     const formData = new FormData()
     formData.append('file', file)
     formData.append('model', 'whisper-1')
@@ -929,19 +933,13 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
     formData.append('response_format', 'verbose_json')
     formData.append('timestamp_granularities[]', 'word')
     formData.append('timestamp_granularities[]', 'segment')
-    if (language) {
-      formData.append('language', language)
-    }
-    if (prompt) {
-      formData.append('prompt', prompt)
-    }
+    if (language) formData.append('language', language)
+    if (prompt) formData.append('prompt', prompt)
 
     const url = `${baseUrl || 'https://api.openai.com/v1'}/audio/transcriptions`
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`
-      },
+      headers: { Authorization: `Bearer ${apiKey}` },
       body: formData
     })
 
@@ -951,10 +949,7 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
       throw new Error(`Whisper API error: ${response.status} - ${errText}`)
     }
 
-    const arrayBuf = await response.arrayBuffer()
-    const raw = new TextDecoder('utf-8').decode(arrayBuf)
-    const json = JSON.parse(raw)
-    // Chỉ trả các field cần thiết (payload gọn qua IPC)
+    const json = JSON.parse(new TextDecoder('utf-8').decode(await response.arrayBuffer()))
     return {
       text: json.text || '',
       words: Array.isArray(json.words) ? json.words : [],
@@ -966,6 +961,88 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
           }))
         : []
     }
+  }
+
+  ipcMain.handle('call-whisper-api', async (event, { apiKey, baseUrl, audioPath, language, prompt }) => {
+    const MAX_WHISPER_BYTES = 24 * 1024 * 1024
+    const stats = await fs.stat(audioPath)
+
+    if (stats.size <= MAX_WHISPER_BYTES) {
+      return transcribeOnce(apiKey, baseUrl, audioPath, language, prompt)
+    }
+
+    // Audio quá 25MB: chia khúc ~10 phút, chuyển ngữ từng khúc rồi ghép với offset thời gian
+    assertFfmpegAvailable()
+    const totalDuration = await getVideoDuration(audioPath)
+    if (totalDuration <= 0) {
+      throw new Error('Không đọc được thời lượng audio để chia khúc.')
+    }
+    // Cắt cứng tại mốc cố định có thể rơi GIỮA câu nói → mất chữ, nghe sai.
+    // Giải pháp: các khúc CHỒNG LẤN nhau 5s; khi ghép chỉ giữ nội dung thuộc "vùng sở
+    // hữu" của mỗi khúc — câu vắt qua ranh giới luôn được một khúc nghe TRỌN VẸN.
+    // (Không dùng dò-im-lặng vì video nhạc nền liên tục không có khoảng lặng để cắt.)
+    const CHUNK_SECONDS = 600
+    const OVERLAP_SECONDS = 5
+    const numChunks = Math.ceil(totalDuration / CHUNK_SECONDS)
+    console.log(`[whisper] Audio ${(stats.size / 1024 / 1024).toFixed(1)}MB > 24MB — chia ${numChunks} khúc x ${CHUNK_SECONDS}s (chồng lấn ${OVERLAP_SECONDS}s)`)
+
+    const merged = {
+      text: '',
+      words: [] as { word: string; start: number; end: number }[],
+      segments: [] as { start: number; end: number; text: string }[]
+    }
+    const chunkDir = path.join(app.getPath('temp'), `whisper_chunks_${Date.now()}`)
+    await fs.mkdir(chunkDir, { recursive: true })
+
+    try {
+      for (let i = 0; i < numChunks; i++) {
+        // Vùng sở hữu của khúc i: [ownStart, ownEnd). Audio thực tế cắt rộng hơn
+        // (thêm overlap 2 phía) để câu vắt ranh giới được nghe trọn trong một khúc.
+        const ownStart = i * CHUNK_SECONDS
+        const ownEnd = Math.min((i + 1) * CHUNK_SECONDS, totalDuration)
+        const audioStart = Math.max(0, ownStart - (i > 0 ? OVERLAP_SECONDS : 0))
+        const audioEnd = Math.min(totalDuration, ownEnd + (i < numChunks - 1 ? OVERLAP_SECONDS : 0))
+        const chunkPath = path.join(chunkDir, `chunk_${i}.mp3`)
+        await new Promise<void>((resolve, reject) => {
+          // -c copy: cắt theo frame MP3, nhanh và không tái nén (không giảm chất lượng)
+          const ff = spawn(ffmpegPath, [
+            '-ss', audioStart.toFixed(3),
+            '-t', (audioEnd - audioStart).toFixed(3),
+            '-i', audioPath,
+            '-c', 'copy',
+            chunkPath,
+            '-y'
+          ])
+          ff.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`FFmpeg chia khúc lỗi (code ${code})`))))
+          ff.on('error', reject)
+        })
+
+        const part = await transcribeOnce(apiKey, baseUrl, chunkPath, language, prompt)
+        // Chỉ giữ nội dung bắt đầu trong vùng sở hữu — phần trong overlap thuộc khúc kia,
+        // tránh trùng lặp câu ở vùng chồng lấn
+        for (const w of part.words) {
+          const gs = w.start + audioStart
+          if (gs >= ownStart && gs < ownEnd) {
+            merged.words.push({ word: w.word, start: gs, end: w.end + audioStart })
+          }
+        }
+        for (const s of part.segments) {
+          const gs = s.start + audioStart
+          if (gs >= ownStart - 0.2 && gs < ownEnd) {
+            merged.segments.push({ start: gs, end: s.end + audioStart, text: s.text })
+            merged.text += (merged.text ? ' ' : '') + s.text.trim()
+          }
+        }
+        event.sender.send('ffmpeg-progress', {
+          type: 'whisper-chunks',
+          percent: Math.round(((i + 1) / numChunks) * 100)
+        })
+      }
+    } finally {
+      await fs.rm(chunkDir, { recursive: true, force: true }).catch(() => {})
+    }
+
+    return merged
   })
 
   // 6. Call OpenAI GPT API for Translation

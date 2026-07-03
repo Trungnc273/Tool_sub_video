@@ -156,6 +156,12 @@ export function buildSegmentsFromWords(
   let newIndex = 1;
 
   for (const seg of baseSegments) {
+    // Resync con trỏ từ tại ranh giới segment: bỏ từ thừa của segment trước để
+    // lệch cục bộ (nếu có) không lan dây chuyền sang các câu sau
+    while (wordIdx < words.length && Math.round(words[wordIdx].end * 1000) <= seg.start - 200) {
+      wordIdx++;
+    }
+
     // Tái dùng quy tắc tách câu hiện có (dấu câu chính, rồi phẩy nếu câu dài)
     const sentences = splitSegment(seg).map((s) => s.text);
 
