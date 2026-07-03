@@ -562,54 +562,40 @@ async function getOrSynthesizeTts(
         const vfValue = videoFilters.join(',')
         
         if (enableTts) {
-          const lines = assContent.split('\n')
-          const parsedLines: { startMs: number; endMs: number; text: string }[] = []
-          
-          for (const line of lines) {
-            if (line.startsWith('Dialogue:')) {
-              const parts = line.split(',')
-              if (parts.length >= 10) {
-                const startStr = parts[1] // e.g. "0:00:01.18"
-                const endStr = parts[2] // e.g. "0:00:03.18"
-                const text = parts.slice(9).join(',').trim()
-                
-                const [hStart, mStart, sPartsStart] = startStr.split(':')
-                const [sStart, csStart] = sPartsStart.split('.')
-                const startMs = (parseInt(hStart) * 3600 + parseInt(mStart) * 60 + parseInt(sStart)) * 1000 + parseInt(csStart) * 10
-                
-                const [hEnd, mEnd, sPartsEnd] = endStr.split(':')
-                const [sEnd, csEnd] = sPartsEnd.split('.')
-                const endMs = (parseInt(hEnd) * 3600 + parseInt(mEnd) * 60 + parseInt(sEnd)) * 1000 + parseInt(csEnd) * 10
-                
-                parsedLines.push({ startMs, endMs, text })
-              }
-            }
-          }
-
-          const ttsSegments: { index: number; startMs: number; durationS: number; text: string; audioOffset?: number }[] = []
+          // Mốc lồng tiếng lấy TRỰC TIẾP từ segments (mốc nói thật) — không parse ngược
+          // từ ASS vì ASS mang mốc HIỂN THỊ (đã trừ lead-in 200ms), làm giọng cất lên
+          // trước khi nhân vật mở miệng (spec 05 FR4).
+          const ttsSegments: {
+            index: number
+            startMs: number
+            durationS: number // slot an toàn: tới lúc câu sau bắt đầu
+            speechS: number // khung nói thật của câu — mục tiêu khớp tốc độ (FR3)
+            text: string
+            audioOffset?: number
+          }[] = []
           let segIndex = 1
-          
-          const segs = options?.segments || []
-          for (let i = 0; i < parsedLines.length; i++) {
-            const current = parsedLines[i]
-            const next = parsedLines[i + 1]
-            
-            // Available duration is the time until the next segment starts
-            // If it is the last segment, we allow it to play up to 300 seconds, as it won't overlap with any subsequent segment
-            const availableDurationS = next 
-              ? Math.max(0.1, (next.startMs - current.startMs) / 1000)
-              : 300.0 // large default for the last segment
-            
-            const originalSeg = segs[i]
-            const textToSpeak = originalSeg ? (originalSeg.translatedText || '') : ''
+
+          const segs: { start: number; end: number; translatedText?: string; audioOffset?: number }[] =
+            options?.segments || []
+          for (let i = 0; i < segs.length; i++) {
+            const current = segs[i]
+            const next = segs[i + 1]
+
+            // Slot an toàn: tới khi câu sau bắt đầu (câu cuối cho phép tối đa 300s)
+            const availableDurationS = next
+              ? Math.max(0.1, (next.start - current.start) / 1000)
+              : 300.0
+
+            const textToSpeak = current.translatedText || ''
             const cleanText = textToSpeak.replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').replace(/\n/g, ' ').trim()
             if (cleanText) {
-              ttsSegments.push({ 
-                index: segIndex++, 
-                startMs: current.startMs, 
-                durationS: availableDurationS, 
+              ttsSegments.push({
+                index: segIndex++,
+                startMs: current.start,
+                durationS: availableDurationS,
+                speechS: Math.max(0.3, (current.end - current.start) / 1000),
                 text: cleanText,
-                audioOffset: originalSeg ? (originalSeg.audioOffset || 0) : 0
+                audioOffset: current.audioOffset || 0
               })
             }
           }
@@ -635,10 +621,13 @@ async function getOrSynthesizeTts(
                   speed: baseSpeed
                 })
                 let fitTempo = 1
-                if (autoSpeed && seg.durationS > 0) {
+                if (autoSpeed) {
                   const actualDur = await getVideoDuration(filePath)
-                  if (actualDur > seg.durationS) {
-                    fitTempo = Math.min(2.0, actualDur / seg.durationS)
+                  if (actualDur > 0) {
+                    // Khớp HAI CHIỀU với khung nói thật: nén khi TTS dài hơn, kéo chậm khi
+                    // ngắn hơn — đọc xong đúng lúc nhân vật nói xong. Giới hạn 0.7-1.8 giữ
+                    // giọng tự nhiên (spec 05 FR3/FR5).
+                    fitTempo = Math.min(1.8, Math.max(0.7, actualDur / seg.speechS))
                   }
                 }
                 readySegs.push({ seg, filePath, fitTempo })
@@ -666,7 +655,7 @@ async function getOrSynthesizeTts(
               const delayMs = Math.max(0, seg.startMs + (seg.audioOffset || 0) + audioOffset)
               // aresample đồng nhất sample rate (TTS 24kHz vs video 44.1/48kHz);
               // atempo nén thời gian đúng tỷ lệ đã đo; atrim giữ làm lưới an toàn cuối
-              const tempoFilter = fitTempo > 1.01 ? `,atempo=${fitTempo.toFixed(3)}` : ''
+              const tempoFilter = Math.abs(fitTempo - 1) > 0.02 ? `,atempo=${fitTempo.toFixed(3)}` : ''
               delayFilters.push(
                 `[${inputIdx}:a]aresample=44100${tempoFilter},atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`
               )
@@ -781,24 +770,32 @@ async function getOrSynthesizeTts(
           outputArgs.push('-t', durationS.toFixed(3))
         }
 
-        const ttsSegments: { index: number; startMs: number; durationS: number; text: string; audioOffset?: number }[] = []
+        const ttsSegments: {
+          index: number
+          startMs: number
+          durationS: number
+          speechS: number
+          text: string
+          audioOffset?: number
+        }[] = []
         let segIndex = 1
 
         for (let i = 0; i < segments.length; i++) {
           const current = segments[i]
           const next = segments[i + 1]
-          
-          const availableDurationS = next 
+
+          const availableDurationS = next
             ? Math.max(0.1, (next.start - current.start) / 1000)
             : 300.0 // large default for the last segment
-            
+
           const textToUse = current.translatedText || ''
           const cleanText = textToUse.replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').replace(/\n/g, ' ').trim()
           if (cleanText) {
-            ttsSegments.push({ 
-              index: segIndex++, 
-              startMs: current.start, 
-              durationS: availableDurationS, 
+            ttsSegments.push({
+              index: segIndex++,
+              startMs: current.start,
+              durationS: availableDurationS,
+              speechS: Math.max(0.3, (current.end - current.start) / 1000),
               text: cleanText,
               audioOffset: current.audioOffset || 0
             })
@@ -828,10 +825,11 @@ async function getOrSynthesizeTts(
               speed: baseSpeed
             })
             let fitTempo = 1
-            if (autoSpeed && seg.durationS > 0) {
+            if (autoSpeed) {
               const actualDur = await getVideoDuration(filePath)
-              if (actualDur > seg.durationS) {
-                fitTempo = Math.min(2.0, actualDur / seg.durationS)
+              if (actualDur > 0) {
+                // Khớp hai chiều với khung nói thật (spec 05 FR3/FR5)
+                fitTempo = Math.min(1.8, Math.max(0.7, actualDur / seg.speechS))
               }
             }
             readySegs.push({ seg, filePath, fitTempo })
@@ -861,7 +859,7 @@ async function getOrSynthesizeTts(
 
           const durFormatted = seg.durationS.toFixed(3)
           const delayMs = Math.max(0, seg.startMs + (seg.audioOffset || 0) + audioOffset)
-          const tempoFilter = fitTempo > 1.01 ? `,atempo=${fitTempo.toFixed(3)}` : ''
+          const tempoFilter = Math.abs(fitTempo - 1) > 0.02 ? `,atempo=${fitTempo.toFixed(3)}` : ''
           delayFilters.push(
             `[${inputIdx}:a]aresample=44100${tempoFilter},atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`
           )

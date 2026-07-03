@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import { Project } from './Dashboard'
 import { AppSettings } from './Settings'
-import { parseSRT, stringifySRT, stringifyTxt, formatTime, SubtitleSegment, splitSegmentsBySentences, buildSegmentsFromWords } from '../utils/srt'
+import { parseSRT, stringifySRT, stringifyTxt, formatTime, SubtitleSegment, splitSegmentsBySentences, buildSegmentsFromWords, displayStart } from '../utils/srt'
 
 function fixUtf8Garbage(str: string): string {
   if (!str) return ''
@@ -384,9 +384,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
   }
 
+  // Mốc hiển thị = mốc nói thật - lead-in 200ms (spec 05 FR2), không lấn câu trước
+  let prevEnd = 0;
   segments.forEach((seg) => {
-    const start = formatAssTime(seg.start);
+    const start = formatAssTime(displayStart(seg.start, prevEnd));
     const end = formatAssTime(seg.end);
+    prevEnd = seg.end;
     const text = (seg.translatedText || seg.text).replace(/\n/g, '\\N');
     ass += `Dialogue: 0,${start},${end},Default,,0,0,0,,{\\pos(${X},${Y})}${text}\n`;
   });
@@ -702,7 +705,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
           const overlay = document.getElementById('subtitle-preview-overlay')
           if (overlay) {
             const active = segmentsRef.current.find(
-              (s) => ms >= s.start + audioOffset && ms <= s.end + audioOffset
+              (s) => ms >= displayStart(s.start + audioOffset) && ms <= s.end + audioOffset
             )
             const span = overlay.firstElementChild as HTMLElement | null
             if (active) {
@@ -1162,7 +1165,46 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     }
   }, [bgVolume, isMuted])
 
-  const playTtsAudio = async (text: string, startOffsetMs = 0): Promise<void> => {
+  // Audio đã tải trước cho các câu sắp tới (spec 05 FR1) — đến lượt là phát tức thì
+  const prefetchedAudioRef = useRef<Map<string, { text: string; audio: HTMLAudioElement }>>(new Map())
+
+  const prefetchUpcomingTts = (fromMs: number): void => {
+    const upcoming = segments
+      .filter((s) => s.start > fromMs)
+      .sort((a, b) => a.start - b.start)
+      .slice(0, 3)
+    for (const s of upcoming) {
+      const text = (s.translatedText || s.text || '').replace(/\{[^}]*\}/g, '').replace(/\\N/g, ' ').trim()
+      if (!text) continue
+      const existing = prefetchedAudioRef.current.get(s.id)
+      if (existing && existing.text === text) continue
+      // Đặt placeholder ngay để không gọi trùng khi effect chạy lại
+      prefetchedAudioRef.current.set(s.id, { text, audio: new Audio() })
+      window.api
+        .getTtsAudio({
+          text,
+          voice: ttsVoice,
+          apiKey: settings.apiKey || '',
+          baseUrl: settings.baseUrl || '',
+          elevenLabsApiKey: settings.elevenLabsApiKey || '',
+          speed: ttsSpeed
+        })
+        .then((url) => {
+          const a = new Audio(url)
+          a.preload = 'auto'
+          prefetchedAudioRef.current.set(s.id, { text, audio: a })
+        })
+        .catch(() => prefetchedAudioRef.current.delete(s.id))
+    }
+    // Giữ map gọn — xóa mục cũ nhất khi vượt 12
+    while (prefetchedAudioRef.current.size > 12) {
+      const oldest = prefetchedAudioRef.current.keys().next().value
+      if (oldest === undefined) break
+      prefetchedAudioRef.current.delete(oldest)
+    }
+  }
+
+  const playTtsAudio = async (text: string, startOffsetMs = 0, segId?: string): Promise<void> => {
     if (activeAudioRef.current) {
       activeAudioRef.current.pause()
       activeAudioRef.current = null
@@ -1179,31 +1221,40 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     const speedToUse = ttsSpeed
 
     try {
-      const audioUrl = await window.api.getTtsAudio({
-        text: cleanText,
-        voice: ttsVoice,
-        apiKey: settings.apiKey || '',
-        baseUrl: settings.baseUrl || '',
-        elevenLabsApiKey: settings.elevenLabsApiKey || '',
-        speed: speedToUse
-      })
-      const audio = new Audio(audioUrl)
+      // Ưu tiên audio đã prefetch — phát tức thì, không chờ IPC/tải file
+      let audio: HTMLAudioElement
+      const pre = segId ? prefetchedAudioRef.current.get(segId) : undefined
+      if (pre && pre.text === cleanText && pre.audio.src) {
+        audio = pre.audio
+        audio.currentTime = 0
+      } else {
+        const audioUrl = await window.api.getTtsAudio({
+          text: cleanText,
+          voice: ttsVoice,
+          apiKey: settings.apiKey || '',
+          baseUrl: settings.baseUrl || '',
+          elevenLabsApiKey: settings.elevenLabsApiKey || '',
+          speed: speedToUse
+        })
+        audio = new Audio(audioUrl)
+      }
       activeAudioRef.current = audio
       audio.volume = ttsVolume / 100
 
-      audio.addEventListener('play', () => {
+      // Dùng on* (không addEventListener) để audio prefetch tái dùng không bị chồng listener
+      audio.onplay = () => {
         duckVideoVolume()
-      })
-      audio.addEventListener('pause', () => {
+      }
+      audio.onpause = () => {
         if (activeAudioRef.current === audio) {
           restoreVideoVolume()
         }
-      })
-      audio.addEventListener('ended', () => {
+      }
+      audio.onended = () => {
         if (activeAudioRef.current === audio) {
           restoreVideoVolume()
         }
-      })
+      }
 
       // Trễ nhỏ (<500ms) là do thời gian tải/sinh audio — phát từ ĐẦU câu để không
       // nuốt chữ đầu; chỉ seek vào giữa khi người dùng thực sự tua vào giữa câu
@@ -1286,6 +1337,8 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
       }
     } else {
       // playing && enableTts
+      // Tải trước audio 3 câu sắp tới để phát tức thì, không nuốt từ đầu câu (spec 05 FR1)
+      prefetchUpcomingTts(currentTime)
       if (!active) {
         if (activeAudioRef.current) {
           activeAudioRef.current.pause()
@@ -1309,7 +1362,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
 
           if (lastSpokenIdRef.current !== active.id) {
             lastSpokenIdRef.current = active.id
-            playTtsAudio(cleanText, expectedOffsetMs)
+            playTtsAudio(cleanText, expectedOffsetMs, active.id)
           } else {
             const audio = activeAudioRef.current
             if (audio) {
@@ -1333,7 +1386,7 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
                 }
               }
             } else {
-              playTtsAudio(cleanText, expectedOffsetMs)
+              playTtsAudio(cleanText, expectedOffsetMs, active.id)
             }
           }
         }
@@ -4085,7 +4138,8 @@ ${lines}`
                       segStart = draggedClipTimesRef.current.start
                       segEnd = draggedClipTimesRef.current.end
                     }
-                    return currentTime >= (segStart + audioOffset) && currentTime <= (segEnd + audioOffset)
+                    // Hiển thị sớm lead-in 200ms so với mốc nói thật (spec 05 FR2)
+                    return currentTime >= displayStart(segStart + audioOffset) && currentTime <= (segEnd + audioOffset)
                   })
 
                   // Luôn render container (ẩn khi không có câu active) để vòng lặp rAF

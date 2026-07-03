@@ -83,11 +83,15 @@ export function parseSRT(srtContent: string): SubtitleSegment[] {
 }
 
 // Convert SubtitleSegment array to SRT string
+// Mốc hiển thị = mốc nói thật - lead-in (spec 05 FR2), không lấn câu trước
 export function stringifySRT(segments: SubtitleSegment[], useTranslation: boolean = false): string {
+  let prevEnd = 0;
   return segments
     .map((seg, idx) => {
       const textToUse = useTranslation ? (seg.translatedText || seg.text) : seg.text;
-      return `${idx + 1}\n${formatTime(seg.start)} --> ${formatTime(seg.end)}\n${textToUse}`;
+      const shownStart = displayStart(seg.start, prevEnd);
+      prevEnd = seg.end;
+      return `${idx + 1}\n${formatTime(shownStart)} --> ${formatTime(seg.end)}\n${textToUse}`;
     })
     .join('\n\n');
 }
@@ -119,8 +123,16 @@ export interface WhisperSegmentRaw {
 }
 
 const MIN_SEGMENT_DURATION_MS = 300;
-// Chữ hiện sớm hơn lời nói một nhịp để mắt kịp bắt (chuẩn phụ đề chuyên nghiệp ~2 frame+)
-const SUBTITLE_LEAD_IN_MS = 200;
+// Chữ hiện sớm hơn lời nói một nhịp để mắt kịp bắt (chuẩn phụ đề chuyên nghiệp ~2 frame+).
+// CHỈ áp ở tầng hiển thị (overlay/ASS/SRT xuất) — dữ liệu segment lưu mốc nói THẬT để
+// lồng tiếng đặt đúng lúc nhân vật mở miệng (spec 05 FR2).
+export const SUBTITLE_LEAD_IN_MS = 200;
+
+// Mốc hiển thị của một segment: hiện sớm lead-in, không lấn vào câu trước
+export function displayStart(segStart: number, prevEnd?: number): number {
+  const lead = Math.max(0, segStart - SUBTITLE_LEAD_IN_MS);
+  return prevEnd !== undefined ? Math.max(prevEnd, lead) : lead;
+}
 
 // Chỉ giữ chữ/số (mọi ngôn ngữ) để so khớp từ với câu — bỏ dấu câu, khoảng trắng
 function normalizeForMatch(s: string): string {
@@ -187,9 +199,6 @@ export function buildSegmentsFromWords(
         startMs = seg.start;
         endMs = seg.end;
       }
-
-      // Lead-in: đẩy chữ lên sớm hơn lời nói, nhưng không lấn vào câu trước
-      startMs = Math.max(0, startMs - SUBTITLE_LEAD_IN_MS);
 
       if (endMs - startMs < MIN_SEGMENT_DURATION_MS) {
         endMs = startMs + MIN_SEGMENT_DURATION_MS;
