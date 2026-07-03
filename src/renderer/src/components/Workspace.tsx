@@ -1204,6 +1204,98 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
     }
   }
 
+  // Bộ chọn giọng/tốc độ DÙNG CHUNG cho panel Thuyết minh và modal Xuất video —
+  // cùng một state (ttsVoice/ttsSpeed/autoSpeed), chọn ở đâu cũng đồng bộ (REVIEW 4.9b)
+  const PRESET_TTS_VOICES = ['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni']
+
+  const renderVoiceSettings = (): React.JSX.Element => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Giọng thuyết minh AI</span>
+      <select
+        className="form-select"
+        style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
+        value={PRESET_TTS_VOICES.includes(ttsVoice) ? ttsVoice : 'custom'}
+        onChange={(e) => {
+          const val = e.target.value
+          if (val === 'custom') {
+            if (PRESET_TTS_VOICES.includes(ttsVoice)) setTtsVoice('')
+          } else {
+            setTtsVoice(val)
+          }
+        }}
+      >
+        <optgroup label="Miễn phí (Không cần API Key)">
+          <option value="edge_hoaimy">Giọng nữ Tiếng Việt (Hoài My - Miễn phí)</option>
+          <option value="edge_namminh">Giọng nam Tiếng Việt (Nam Minh - Miễn phí)</option>
+        </optgroup>
+        <optgroup label="OpenAI (TTS)">
+          <option value="nova">Giọng nữ OpenAI (Nova)</option>
+          <option value="shimmer">Giọng nữ OpenAI (Shimmer)</option>
+          <option value="alloy">Giọng trung tính OpenAI (Alloy)</option>
+          <option value="fable">Giọng trung tính OpenAI (Fable)</option>
+          <option value="echo">Giọng nam OpenAI (Echo)</option>
+          <option value="onyx">Giọng nam OpenAI (Onyx)</option>
+        </optgroup>
+        <optgroup label="ElevenLabs (Premium - Đọc Tiếng Việt tốt)">
+          <option value="eleven_bella">Giọng nữ Tiếng Việt (Bella)</option>
+          <option value="eleven_antoni">Giọng nam Tiếng Việt (Antoni)</option>
+          <option value="custom">-- Nhập ID tùy chỉnh --</option>
+        </optgroup>
+      </select>
+      {!PRESET_TTS_VOICES.includes(ttsVoice) && (
+        <div style={{ marginTop: '4px' }}>
+          <input
+            type="text"
+            className="form-input"
+            style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%', borderColor: 'var(--accent-purple)' }}
+            placeholder="Dán ElevenLabs Voice ID vào đây..."
+            value={ttsVoice}
+            onChange={(e) => setTtsVoice(extractVoiceId(e.target.value))}
+          />
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Tốc độ thuyết minh</span>
+        <select
+          className="form-select"
+          style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
+          value={ttsSpeed}
+          onChange={(e) => {
+            const val = parseFloat(e.target.value)
+            setTtsSpeed(val)
+            setIsTtsGenerated(false)
+          }}
+        >
+          <option value="0.8">0.8x (Chậm)</option>
+          <option value="0.9">0.9x</option>
+          <option value="1.0">1.0x (Mặc định — khớp nhịp nói)</option>
+          <option value="1.05">1.05x</option>
+          <option value="1.1">1.1x</option>
+          <option value="1.15">1.15x</option>
+          <option value="1.2">1.2x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.3">1.3x</option>
+          <option value="1.4">1.4x</option>
+          <option value="1.5">1.5x (Nhanh)</option>
+        </select>
+      </div>
+      <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+          <input
+            type="checkbox"
+            checked={autoSpeed}
+            onChange={(e) => {
+              setAutoSpeed(e.target.checked)
+              setIsTtsGenerated(false)
+            }}
+            style={{ accentColor: 'var(--accent-purple)' }}
+          />
+          Tự động khớp tốc độ theo phụ đề
+        </label>
+      </div>
+    </div>
+  )
+
   const playTtsAudio = async (text: string, startOffsetMs = 0, segId?: string): Promise<void> => {
     if (activeAudioRef.current) {
       activeAudioRef.current.pause()
@@ -3461,93 +3553,7 @@ ${lines}`
                 marginTop: '4px'
               }}
             >
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Giọng thuyết minh AI</span>
-                <select
-                  className="form-select"
-                  style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
-                  value={['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice) ? ttsVoice : 'custom'}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    if (val === 'custom') {
-                      const isCustomNow = !['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice)
-                      if (!isCustomNow) setTtsVoice('')
-                    } else {
-                      setTtsVoice(val)
-                    }
-                  }}
-                >
-                  <optgroup label="Miễn phí (Không cần API Key)">
-                    <option value="edge_hoaimy">Giọng nữ Tiếng Việt (Hoài My - Miễn phí)</option>
-                    <option value="edge_namminh">Giọng nam Tiếng Việt (Nam Minh - Miễn phí)</option>
-                  </optgroup>
-                  <optgroup label="OpenAI (TTS)">
-                    <option value="nova">Giọng nữ OpenAI (Nova)</option>
-                    <option value="shimmer">Giọng nữ OpenAI (Shimmer)</option>
-                    <option value="alloy">Giọng trung tính OpenAI (Alloy)</option>
-                    <option value="fable">Giọng trung tính OpenAI (Fable)</option>
-                    <option value="echo">Giọng nam OpenAI (Echo)</option>
-                    <option value="onyx">Giọng nam OpenAI (Onyx)</option>
-                  </optgroup>
-                  <optgroup label="ElevenLabs (Premium - Đọc Tiếng Việt tốt)">
-                    <option value="eleven_bella">Giọng nữ Tiếng Việt (Bella)</option>
-                    <option value="eleven_antoni">Giọng nam Tiếng Việt (Antoni)</option>
-                    <option value="custom">-- Nhập ID tùy chỉnh --</option>
-                  </optgroup>
-                </select>
-                {!['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice) && (
-                  <div style={{ marginTop: '4px' }}>
-                    <input
-                      type="text"
-                      className="form-input"
-                      style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%', borderColor: 'var(--accent-purple)' }}
-                      placeholder="Dán ElevenLabs Voice ID vào đây..."
-                      value={ttsVoice}
-                      onChange={(e) => setTtsVoice(extractVoiceId(e.target.value))}
-                    />
-                  </div>
-                )}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Tốc độ thuyết minh</span>
-                  <select
-                    className="form-select"
-                    style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
-                    value={ttsSpeed}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value)
-                      setTtsSpeed(val)
-                      setIsTtsGenerated(false)
-                    }}
-                  >
-                    <option value="0.8">0.8x (Chậm)</option>
-                    <option value="0.9">0.9x</option>
-                    <option value="1.0">1.0x (Mặc định)</option>
-                    <option value="1.05">1.05x</option>
-                    <option value="1.1">1.1x</option>
-                    <option value="1.15">1.15x (Khuyên dùng)</option>
-                    <option value="1.2">1.2x</option>
-                    <option value="1.25">1.25x</option>
-                    <option value="1.3">1.3x</option>
-                    <option value="1.4">1.4x</option>
-                    <option value="1.5">1.5x (Nhanh)</option>
-                  </select>
-                </div>
-
-                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                    <input
-                      type="checkbox"
-                      checked={autoSpeed}
-                      onChange={(e) => {
-                        setAutoSpeed(e.target.checked)
-                        setIsTtsGenerated(false)
-                      }}
-                      style={{ accentColor: 'var(--accent-purple)' }}
-                    />
-                    Tự động khớp tốc độ theo phụ đề
-                  </label>
-                </div>
-              </div>
+              <div style={{ flex: 1 }}>{renderVoiceSettings()}</div>
               <button
                 className="btn btn-secondary"
                 style={{
@@ -5199,91 +5205,10 @@ ${lines}`
                 }}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Giọng thuyết minh AI</label>
-                  <select
-                    className="form-select"
-                    style={{ fontSize: '0.8rem', padding: '4px 8px', height: '30px' }}
-                    value={['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice) ? ttsVoice : 'custom'}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      if (val === 'custom') {
-                        const isCustomNow = !['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice)
-                        if (!isCustomNow) setTtsVoice('')
-                      } else {
-                        setTtsVoice(val)
-                      }
-                    }}
-                  >
-                    <optgroup label="Miễn phí (Không cần API Key)">
-                      <option value="edge_hoaimy">Giọng nữ Tiếng Việt (Hoài My - Miễn phí)</option>
-                      <option value="edge_namminh">Giọng nam Tiếng Việt (Nam Minh - Miễn phí)</option>
-                    </optgroup>
-                    <optgroup label="OpenAI (TTS)">
-                      <option value="nova">Giọng nữ OpenAI (Nova)</option>
-                      <option value="shimmer">Giọng nữ OpenAI (Shimmer)</option>
-                      <option value="alloy">Giọng trung tính OpenAI (Alloy)</option>
-                      <option value="fable">Giọng trung tính OpenAI (Fable)</option>
-                      <option value="echo">Giọng nam OpenAI (Echo)</option>
-                      <option value="onyx">Giọng nam OpenAI (Onyx)</option>
-                    </optgroup>
-                    <optgroup label="ElevenLabs (Premium - Đọc Tiếng Việt tốt)">
-                      <option value="eleven_bella">Giọng nữ Tiếng Việt (Bella)</option>
-                      <option value="eleven_antoni">Giọng nam Tiếng Việt (Antoni)</option>
-                      <option value="custom">-- Nhập ID tùy chỉnh --</option>
-                    </optgroup>
-                  </select>
-                  {!['edge_hoaimy', 'edge_namminh', 'nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'eleven_bella', 'eleven_antoni'].includes(ttsVoice) && (
-                    <div style={{ marginTop: '4px' }}>
-                      <input
-                        type="text"
-                        className="form-input"
-                        style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%', borderColor: 'var(--accent-purple)' }}
-                        placeholder="Dán ElevenLabs Voice ID vào đây..."
-                        value={ttsVoice}
-                        onChange={(e) => setTtsVoice(extractVoiceId(e.target.value))}
-                      />
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
-                    <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Tốc độ thuyết minh</label>
-                    <select
-                      className="form-select"
-                      style={{ fontSize: '0.8rem', padding: '4px 8px', height: '30px' }}
-                      value={ttsSpeed}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value)
-                        setTtsSpeed(val)
-                        setIsTtsGenerated(false)
-                      }}
-                    >
-                      <option value="0.8">0.8x (Chậm)</option>
-                      <option value="0.9">0.9x</option>
-                      <option value="1.0">1.0x (Mặc định)</option>
-                      <option value="1.05">1.05x</option>
-                      <option value="1.1">1.1x</option>
-                      <option value="1.15">1.15x (Khuyên dùng)</option>
-                      <option value="1.2">1.2x</option>
-                      <option value="1.25">1.25x</option>
-                      <option value="1.3">1.3x</option>
-                      <option value="1.4">1.4x</option>
-                      <option value="1.5">1.5x (Nhanh)</option>
-                    </select>
-                  </div>
-
-                  <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                      <input
-                        type="checkbox"
-                        checked={autoSpeed}
-                        onChange={(e) => {
-                          setAutoSpeed(e.target.checked)
-                          setIsTtsGenerated(false)
-                        }}
-                        style={{ accentColor: 'var(--accent-purple)' }}
-                      />
-                      Tự động khớp tốc độ theo phụ đề
-                    </label>
-                  </div>
+                  {renderVoiceSettings()}
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    (Đồng bộ với bảng Thuyết minh ở màn biên tập — chọn ở đâu cũng như nhau)
+                  </span>
                 </div>
 
                 {exportMode !== 'audio_only' && (
