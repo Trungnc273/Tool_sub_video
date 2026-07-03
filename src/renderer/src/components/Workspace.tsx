@@ -1254,31 +1254,6 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
           />
         </div>
       )}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Tốc độ thuyết minh</span>
-        <select
-          className="form-select"
-          style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
-          value={ttsSpeed}
-          onChange={(e) => {
-            const val = parseFloat(e.target.value)
-            setTtsSpeed(val)
-            setIsTtsGenerated(false)
-          }}
-        >
-          <option value="0.8">0.8x (Chậm)</option>
-          <option value="0.9">0.9x</option>
-          <option value="1.0">1.0x (Mặc định — khớp nhịp nói)</option>
-          <option value="1.05">1.05x</option>
-          <option value="1.1">1.1x</option>
-          <option value="1.15">1.15x</option>
-          <option value="1.2">1.2x</option>
-          <option value="1.25">1.25x</option>
-          <option value="1.3">1.3x</option>
-          <option value="1.4">1.4x</option>
-          <option value="1.5">1.5x (Nhanh)</option>
-        </select>
-      </div>
       <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
           <input
@@ -1290,11 +1265,57 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
             }}
             style={{ accentColor: 'var(--accent-purple)' }}
           />
-          Tự động khớp tốc độ theo phụ đề
+          Tự động khớp tốc độ với lời nói nhân vật (khuyên dùng)
         </label>
       </div>
+      {/* Tốc độ thủ công chỉ có ý nghĩa khi TẮT tự động khớp — bật auto thì mỗi câu
+          đã được đo và co giãn theo khung nói thật, chọn nền bao nhiêu cũng bị kéo về khớp */}
+      {!autoSpeed && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '6px' }}>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Tốc độ thuyết minh (cố định)</span>
+          <select
+            className="form-select"
+            style={{ fontSize: '0.8rem', padding: '4px 8px', height: '28px', width: '100%' }}
+            value={ttsSpeed}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value)
+              setTtsSpeed(val)
+              setIsTtsGenerated(false)
+            }}
+          >
+            <option value="0.8">0.8x (Chậm)</option>
+            <option value="0.9">0.9x</option>
+            <option value="1.0">1.0x (Tự nhiên)</option>
+            <option value="1.05">1.05x</option>
+            <option value="1.1">1.1x</option>
+            <option value="1.15">1.15x</option>
+            <option value="1.2">1.2x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.3">1.3x</option>
+            <option value="1.4">1.4x</option>
+            <option value="1.5">1.5x (Nhanh)</option>
+          </select>
+        </div>
+      )}
     </div>
   )
+
+  // Tên hiển thị của giọng đang chọn (cho dòng tóm tắt ở modal xuất)
+  const ttsVoiceLabel = (): string => {
+    const labels: Record<string, string> = {
+      edge_hoaimy: 'Hoài My (nữ, miễn phí)',
+      edge_namminh: 'Nam Minh (nam, miễn phí)',
+      nova: 'Nova (OpenAI)',
+      shimmer: 'Shimmer (OpenAI)',
+      alloy: 'Alloy (OpenAI)',
+      fable: 'Fable (OpenAI)',
+      echo: 'Echo (OpenAI)',
+      onyx: 'Onyx (OpenAI)',
+      eleven_bella: 'Bella (ElevenLabs)',
+      eleven_antoni: 'Antoni (ElevenLabs)'
+    }
+    return labels[ttsVoice] || `ElevenLabs ID: ${ttsVoice || '(chưa chọn)'}`
+  }
 
   const playTtsAudio = async (text: string, startOffsetMs = 0, segId?: string): Promise<void> => {
     if (activeAudioRef.current) {
@@ -5204,10 +5225,15 @@ ${lines}`
                   gap: '12px'
                 }}
               >
+                {/* Chỉ tóm tắt — cấu hình giọng ở một nơi duy nhất: "Thiết lập phụ đề" */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {renderVoiceSettings()}
-                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    (Đồng bộ với bảng Thuyết minh ở màn biên tập — chọn ở đâu cũng như nhau)
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    🎙️ Giọng: <strong style={{ color: '#fff' }}>{ttsVoiceLabel()}</strong>
+                    {' · '}
+                    {autoSpeed ? 'Tự động khớp tốc độ với lời nói' : `Tốc độ cố định ${ttsSpeed}x`}
+                  </span>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                    Đổi giọng/tốc độ trong &quot;Thiết lập phụ đề&quot; ở màn biên tập
                   </span>
                 </div>
 
