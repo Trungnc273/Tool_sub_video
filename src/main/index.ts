@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { spawn } from 'child_process'
 import { createReadStream, promises as fs } from 'fs'
+import { createHash } from 'crypto'
 import * as path from 'path'
 import * as https from 'https'
 import * as http from 'http'
@@ -101,21 +102,8 @@ function getVideoDuration(videoPath: string): Promise<number> {
   })
 }
 
-function estimateTextDuration(text: string): number {
-  const wordCount = text.split(/\s+/).filter(Boolean).length
-  return wordCount * 0.40 + 0.2
-}
-
-function getSegmentSpeechSpeed(text: string, durationS: number, baseSpeed: number, autoSpeed: boolean): number {
-  if (!autoSpeed || durationS <= 0) return baseSpeed
-  const naturalDur = estimateTextDuration(text)
-  let targetSpeed = (naturalDur / durationS) * baseSpeed
-  
-  if (targetSpeed < 0.85) targetSpeed = 0.85
-  if (targetSpeed > 2.0) targetSpeed = 2.0
-  
-  return parseFloat(targetSpeed.toFixed(2))
-}
+// (Đã bỏ estimateTextDuration/getSegmentSpeechSpeed — tốc độ tự động giờ ĐO thời lượng
+// thật của audio TTS rồi nén bằng atempo, xem docs/specs/04-dubbing-quality/SPEC.md)
 
 // --- Secure settings storage (API keys) ---
 // Keys are encrypted with OS-level encryption (DPAPI on Windows) via safeStorage,
@@ -441,6 +429,59 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
   throw lastError || new Error('Failed after maximum retries')
 }
 
+// --- TTS hợp nhất: một nơi duy nhất quyết định nhà cung cấp/giọng (spec 04 FR4) ---
+// Trước đây khối logic này bị copy-paste 4 chỗ — thêm giọng mới phải sửa cả 4, dễ sót.
+const OPENAI_TTS_VOICES = ['nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'ash', 'sage', 'coral']
+const ELEVEN_VOICE_IDS: Record<string, string> = {
+  eleven_rachel: '21m0aEP3W9q0441cE85e',
+  eleven_antoni: 'ErXwobaYiN019PkySvjV',
+  eleven_nicole: 'piTKgcLEGmPEe24vB4R2b',
+  eleven_adam: 'pNInz6obpgDQ51uflcfy',
+  eleven_bella: 'EXAVITQu4vr4xnSDxMaL'
+}
+
+interface TtsOptions {
+  apiKey?: string
+  baseUrl?: string
+  elevenLabsApiKey?: string
+  speed?: number
+}
+
+async function synthesizeSpeech(text: string, voice: string, opts: TtsOptions): Promise<Buffer> {
+  if (voice === 'edge_hoaimy' || voice === 'edge_namminh') {
+    return callEdgeTts(text, voice, opts.speed)
+  }
+  if (OPENAI_TTS_VOICES.includes(voice.toLowerCase())) {
+    return callOpenAiTts(opts.apiKey || '', opts.baseUrl || '', text, voice, opts.speed)
+  }
+  // ElevenLabs: voice là alias (eleven_*) hoặc voiceId trực tiếp.
+  // API ElevenLabs không có tham số tốc độ — tốc độ xử lý bằng atempo lúc trộn (FR2).
+  const voiceId = ELEVEN_VOICE_IDS[voice] || voice
+  return callElevenLabsTts(opts.elevenLabsApiKey || '', text, voiceId)
+}
+
+// Cache TTS dùng chung cho Nghe thử + Xuất video + Xuất audio (spec 04 FR3):
+// xuất lại chỉ sinh câu đã đổi, không trả phí lại toàn bộ.
+async function getOrSynthesizeTts(
+  text: string,
+  voice: string,
+  opts: TtsOptions
+): Promise<{ filePath: string; fromCache: boolean }> {
+  const hash = createHash('md5').update(`${text}_${voice}_${opts.speed || 1.0}`).digest('hex')
+  const cacheDir = path.join(app.getPath('userData'), 'tts_cache')
+  await fs.mkdir(cacheDir, { recursive: true })
+  const filePath = path.join(cacheDir, `${hash}.mp3`)
+  try {
+    await fs.access(filePath)
+    return { filePath, fromCache: true }
+  } catch {
+    // chưa có cache — sinh mới
+  }
+  const buffer = await synthesizeSpeech(text, voice, opts)
+  await fs.writeFile(filePath, buffer)
+  return { filePath, fromCache: false }
+}
+
   // 3. Burn Subtitles (Hardsub & Optional TTS Mix)
   ipcMain.handle('burn-subtitles', async (event, videoPath, assContent, outputPath, options) => {
     assertFfmpegAvailable()
@@ -566,70 +607,68 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
           }
           
           if (ttsSegments.length > 0) {
-            await fs.mkdir(ttsTempDir, { recursive: true })
-            
             const total = ttsSegments.length
             let completed = 0
-            
+
             event.sender.send('ffmpeg-progress', { type: 'burn-subtitles', percent: 0 })
-            
+
+            const baseSpeed = options?.speed || 1.15
+            const autoSpeed = !!options?.autoSpeed
+            // Sinh (hoặc lấy cache) ở tốc độ gốc; khớp slot bằng atempo sau khi ĐO thời
+            // lượng thật (spec 04 FR2) — không ước lượng đếm từ, không cắt cụt lời.
+            const readySegs: { seg: (typeof ttsSegments)[number]; filePath: string; fitTempo: number }[] = []
+
             for (const seg of ttsSegments) {
               try {
-                let audioBuffer: Buffer
-                const isEdgeTts = voice === 'edge_hoaimy' || voice === 'edge_namminh'
-                const openAiVoices = ['nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'ash', 'sage', 'coral']
-                const isElevenLabs = voice && !openAiVoices.includes(voice.toLowerCase()) && !isEdgeTts
-                
-                const baseSpeed = options?.speed || 1.15
-                const autoSpeed = !!options?.autoSpeed
-                const dynamicSpeed = getSegmentSpeechSpeed(seg.text, seg.durationS, baseSpeed, autoSpeed)
-
-                if (isEdgeTts) {
-                  audioBuffer = await callEdgeTts(seg.text, voice, dynamicSpeed)
-                } else if (isElevenLabs) {
-                  let voiceId = voice
-                  if (voice === 'eleven_rachel') voiceId = '21m0aEP3W9q0441cE85e'
-                  else if (voice === 'eleven_antoni') voiceId = 'ErXwobaYiN019PkySvjV'
-                  else if (voice === 'eleven_nicole') voiceId = 'piTKgcLEGmPEe24vB4R2b'
-                  else if (voice === 'eleven_adam') voiceId = 'pNInz6obpgDQ51uflcfy'
-                  else if (voice === 'eleven_bella') voiceId = 'EXAVITQu4vr4xnSDxMaL'
-                  
-                  audioBuffer = await callElevenLabsTts(options?.elevenLabsApiKey || '', seg.text, voiceId)
-                } else {
-                  audioBuffer = await callOpenAiTts(options.apiKey, options.baseUrl, seg.text, voice, dynamicSpeed)
+                const { filePath, fromCache } = await getOrSynthesizeTts(seg.text, voice, {
+                  apiKey: options?.apiKey,
+                  baseUrl: options?.baseUrl,
+                  elevenLabsApiKey: options?.elevenLabsApiKey,
+                  speed: baseSpeed
+                })
+                let fitTempo = 1
+                if (autoSpeed && seg.durationS > 0) {
+                  const actualDur = await getVideoDuration(filePath)
+                  if (actualDur > seg.durationS) {
+                    fitTempo = Math.min(2.0, actualDur / seg.durationS)
+                  }
                 }
-                const filePath = path.join(ttsTempDir, `${seg.index}.mp3`)
-                await fs.writeFile(filePath, audioBuffer)
-                createdTempPaths.push(filePath)
+                readySegs.push({ seg, filePath, fitTempo })
+                if (!fromCache) {
+                  // 120ms delay to prevent rate limit — chỉ cần khi gọi API thật
+                  await new Promise((resolve) => setTimeout(resolve, 120))
+                }
               } catch (err) {
                 console.error(`Error generating TTS for segment ${seg.index}:`, err)
               }
               completed++
               const percent = Math.min(40, Math.round((completed / total) * 40))
               event.sender.send('ffmpeg-progress', { type: 'burn-subtitles', percent })
-              // 120ms delay to prevent rate limit
-              await new Promise((resolve) => setTimeout(resolve, 120))
             }
-            
+
             const inputsArgs: string[] = []
             const delayFilters: string[] = []
             const mixLabels: string[] = []
-            
-            const successfulSegs = ttsSegments.filter(s => createdTempPaths.includes(path.join(ttsTempDir, `${s.index}.mp3`)))
-            
-            successfulSegs.forEach((seg, idx) => {
-              const filePath = path.join(ttsTempDir, `${seg.index}.mp3`)
+
+            readySegs.forEach(({ seg, filePath, fitTempo }, idx) => {
               inputsArgs.push('-i', filePath)
               const inputIdx = idx + 1
-              
+
               const durFormatted = seg.durationS.toFixed(3)
               const delayMs = Math.max(0, seg.startMs + (seg.audioOffset || 0) + audioOffset)
-              delayFilters.push(`[${inputIdx}:a]atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`)
+              // aresample đồng nhất sample rate (TTS 24kHz vs video 44.1/48kHz);
+              // atempo nén thời gian đúng tỷ lệ đã đo; atrim giữ làm lưới an toàn cuối
+              const tempoFilter = fitTempo > 1.01 ? `,atempo=${fitTempo.toFixed(3)}` : ''
+              delayFilters.push(
+                `[${inputIdx}:a]aresample=44100${tempoFilter},atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`
+              )
               mixLabels.push(`[a${seg.index}]`)
             })
-            
+
             const bgFilter = `[0:a]volume=${bgVolume}[abg]`
-            const filterComplex = `${bgFilter};${delayFilters.join(';')};[abg]${mixLabels.join('')}amix=inputs=${successfulSegs.length + 1}:duration=first:dropout_transition=3[aout]`
+            // normalize=0: âm lượng đúng như thanh chỉnh, không bơm xẹp theo số câu
+            // (bằng chứng đo peak PCM: filter cũ trồi 370→1109, normalize=0 phẳng 1228)
+            const filterComplex = `${bgFilter};${delayFilters.join(';')};[abg]${mixLabels.join('')}amix=inputs=${readySegs.length + 1}:duration=first:dropout_transition=3:normalize=0[aout]`
             
             ffmpegArgs = [
               ...seekArgs,
@@ -762,74 +801,67 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
           throw new Error('Không có phụ đề nào để sinh giọng thuyết minh!')
         }
 
-        await fs.mkdir(ttsTempDir, { recursive: true })
-
         const total = ttsSegments.length
         let completed = 0
 
         event.sender.send('ffmpeg-progress', { type: 'export-dubbed-audio', percent: 0 })
 
+        const baseSpeed = options?.speed || 1.15
+        const autoSpeed = !!options?.autoSpeed
+        // Cùng cơ chế với burn-subtitles: cache dùng chung + đo thời lượng thật + atempo
+        const readySegs: { seg: (typeof ttsSegments)[number]; filePath: string; fitTempo: number }[] = []
+
         for (const seg of ttsSegments) {
           try {
-            let audioBuffer: Buffer
-            const isEdgeTts = voice === 'edge_hoaimy' || voice === 'edge_namminh'
-            const openAiVoices = ['nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'ash', 'sage', 'coral']
-            const isElevenLabs = voice && !openAiVoices.includes(voice.toLowerCase()) && !isEdgeTts
-            
-            const baseSpeed = options?.speed || 1.15
-            const autoSpeed = !!options?.autoSpeed
-            const dynamicSpeed = getSegmentSpeechSpeed(seg.text, seg.durationS, baseSpeed, autoSpeed)
-
-            if (isEdgeTts) {
-              audioBuffer = await callEdgeTts(seg.text, voice, dynamicSpeed)
-            } else if (isElevenLabs) {
-              let voiceId = voice
-              if (voice === 'eleven_rachel') voiceId = '21m0aEP3W9q0441cE85e'
-              else if (voice === 'eleven_antoni') voiceId = 'ErXwobaYiN019PkySvjV'
-              else if (voice === 'eleven_nicole') voiceId = 'piTKgcLEGmPEe24vB4R2b'
-              else if (voice === 'eleven_adam') voiceId = 'pNInz6obpgDQ51uflcfy'
-              else if (voice === 'eleven_bella') voiceId = 'EXAVITQu4vr4xnSDxMaL'
-              
-              audioBuffer = await callElevenLabsTts(options?.elevenLabsApiKey || '', seg.text, voiceId)
-            } else {
-              audioBuffer = await callOpenAiTts(options.apiKey, options.baseUrl, seg.text, voice, dynamicSpeed)
+            const { filePath, fromCache } = await getOrSynthesizeTts(seg.text, voice, {
+              apiKey: options?.apiKey,
+              baseUrl: options?.baseUrl,
+              elevenLabsApiKey: options?.elevenLabsApiKey,
+              speed: baseSpeed
+            })
+            let fitTempo = 1
+            if (autoSpeed && seg.durationS > 0) {
+              const actualDur = await getVideoDuration(filePath)
+              if (actualDur > seg.durationS) {
+                fitTempo = Math.min(2.0, actualDur / seg.durationS)
+              }
             }
-
-            const filePath = path.join(ttsTempDir, `${seg.index}.mp3`)
-            await fs.writeFile(filePath, audioBuffer)
-            createdTempPaths.push(filePath)
+            readySegs.push({ seg, filePath, fitTempo })
+            if (!fromCache) {
+              // 120ms delay to prevent rate limit — chỉ cần khi gọi API thật
+              await new Promise((resolve) => setTimeout(resolve, 120))
+            }
           } catch (err) {
             console.error(`Error generating TTS for segment ${seg.index}:`, err)
           }
           completed++
           const percent = Math.min(99, Math.round((completed / total) * 99))
           event.sender.send('ffmpeg-progress', { type: 'export-dubbed-audio', percent })
-          // 120ms delay to prevent rate limit
-          await new Promise((resolve) => setTimeout(resolve, 120))
         }
 
         const inputsArgs: string[] = []
         const delayFilters: string[] = []
         const mixLabels: string[] = []
 
-        const successfulSegs = ttsSegments.filter(s => createdTempPaths.includes(path.join(ttsTempDir, `${s.index}.mp3`)))
-
-        if (successfulSegs.length === 0) {
+        if (readySegs.length === 0) {
           throw new Error('Không thể sinh giọng thuyết minh cho bất kỳ câu thoại nào!')
         }
 
-        successfulSegs.forEach((seg, idx) => {
-          const filePath = path.join(ttsTempDir, `${seg.index}.mp3`)
+        readySegs.forEach(({ seg, filePath, fitTempo }, idx) => {
           inputsArgs.push('-i', filePath)
           const inputIdx = idx
-          
+
           const durFormatted = seg.durationS.toFixed(3)
           const delayMs = Math.max(0, seg.startMs + (seg.audioOffset || 0) + audioOffset)
-          delayFilters.push(`[${inputIdx}:a]atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`)
+          const tempoFilter = fitTempo > 1.01 ? `,atempo=${fitTempo.toFixed(3)}` : ''
+          delayFilters.push(
+            `[${inputIdx}:a]aresample=44100${tempoFilter},atrim=0:${durFormatted},asetpts=PTS-STARTPTS,volume=${ttsVolume},adelay=${delayMs}|${delayMs}[a${seg.index}]`
+          )
           mixLabels.push(`[a${seg.index}]`)
         })
 
-        const filterComplex = `${delayFilters.join(';')};${mixLabels.join('')}amix=inputs=${successfulSegs.length}:duration=longest:dropout_transition=3[aout]`
+        // normalize=0: xem bằng chứng đo peak trong docs/specs/04-dubbing-quality/SPEC.md
+        const filterComplex = `${delayFilters.join(';')};${mixLabels.join('')}amix=inputs=${readySegs.length}:duration=longest:dropout_transition=3:normalize=0[aout]`
 
         const ffmpegArgs = [
           ...inputsArgs,
@@ -1076,43 +1108,14 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
   // 7. Preview TTS Voice with caching
   ipcMain.handle('preview-tts-voice', async (_, voice, apiKey, baseUrl, elevenLabsApiKey, speed) => {
     try {
-      const cacheDir = app.getPath('temp')
-      const cachedFilePath = path.join(cacheDir, `tts_preview_${voice}_${speed || 1.0}.mp3`)
-
-      // Check if file is already cached
-      try {
-        await fs.access(cachedFilePath)
-        console.log(`[TTS Preview] Cache hit: ${cachedFilePath}`)
-        return `media://local/${cachedFilePath}`
-      } catch (err) {
-        // File does not exist, proceed to generate
-      }
-
-      console.log(`[TTS Preview] Cache miss. Generating TTS for voice ${voice} (speed: ${speed})...`)
-      const previewText = "Xin chào, đây là giọng thuyết minh tiếng Việt thử nghiệm."
-      
-      let audioBuffer: Buffer
-      const isEdgeTts = voice === 'edge_hoaimy' || voice === 'edge_namminh'
-      const openAiVoices = ['nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'ash', 'sage', 'coral']
-      const isElevenLabs = voice && !openAiVoices.includes(voice.toLowerCase()) && !isEdgeTts
-      if (isEdgeTts) {
-        audioBuffer = await callEdgeTts(previewText, voice, speed)
-      } else if (isElevenLabs) {
-        let voiceId = voice
-        if (voice === 'eleven_rachel') voiceId = '21m0aEP3W9q0441cE85e'
-        else if (voice === 'eleven_antoni') voiceId = 'ErXwobaYiN019PkySvjV'
-        else if (voice === 'eleven_nicole') voiceId = 'piTKgcLEGmPEe24vB4R2b'
-        else if (voice === 'eleven_adam') voiceId = 'pNInz6obpgDQ51uflcfy'
-        else if (voice === 'eleven_bella') voiceId = 'EXAVITQu4vr4xnSDxMaL'
-        
-        audioBuffer = await callElevenLabsTts(elevenLabsApiKey || '', previewText, voiceId)
-      } else {
-        audioBuffer = await callOpenAiTts(apiKey, baseUrl, previewText, voice, speed)
-      }
-
-      await fs.writeFile(cachedFilePath, audioBuffer)
-      console.log(`[TTS Preview] Cached new voice file at: ${cachedFilePath}`)
-      return `media://local/${cachedFilePath}`
+      const previewText = 'Xin chào, đây là giọng thuyết minh tiếng Việt thử nghiệm.'
+      const { filePath } = await getOrSynthesizeTts(previewText, voice, {
+        apiKey,
+        baseUrl,
+        elevenLabsApiKey,
+        speed
+      })
+      return `media://local/${filePath}`
     } catch (err: any) {
       console.error('[TTS Preview] Error generating preview voice:', err)
       throw new Error(`Failed to generate TTS preview: ${err.message}`)
@@ -1122,43 +1125,14 @@ async function callEdgeTts(text: string, voice: string, speed?: number): Promise
   // 7b. Get TTS Audio with MD5 cache
   ipcMain.handle('get-tts-audio', async (_, { text, voice, apiKey, baseUrl, elevenLabsApiKey, speed }) => {
     try {
-      const crypto = require('crypto')
-      const hash = crypto.createHash('md5').update(`${text}_${voice}_${speed || 1.0}`).digest('hex')
-      const cacheDir = path.join(app.getPath('userData'), 'tts_cache')
-      await fs.mkdir(cacheDir, { recursive: true })
-      
-      const cachedFilePath = path.join(cacheDir, `${hash}.mp3`)
-      
-      // Check if file is already cached
-      try {
-        await fs.access(cachedFilePath)
-        console.log(`[get-tts-audio] Cache hit: "${text.substring(0, 30)}..." -> ${cachedFilePath}`)
-        return `media://local/${cachedFilePath}`
-      } catch (err) {
-        console.log(`[get-tts-audio] Cache miss: "${text.substring(0, 30)}..." (speed: ${speed}). Generating...`)
-      }
-      
-      let audioBuffer: Buffer
-      const isEdgeTts = voice === 'edge_hoaimy' || voice === 'edge_namminh'
-      const openAiVoices = ['nova', 'shimmer', 'alloy', 'fable', 'echo', 'onyx', 'ash', 'sage', 'coral']
-      const isElevenLabs = voice && !openAiVoices.includes(voice.toLowerCase()) && !isEdgeTts
-      if (isEdgeTts) {
-        audioBuffer = await callEdgeTts(text, voice, speed)
-      } else if (isElevenLabs) {
-        let voiceId = voice
-        if (voice === 'eleven_rachel') voiceId = '21m0aEP3W9q0441cE85e'
-        else if (voice === 'eleven_antoni') voiceId = 'ErXwobaYiN019PkySvjV'
-        else if (voice === 'eleven_nicole') voiceId = 'piTKgcLEGmPEe24vB4R2b'
-        else if (voice === 'eleven_adam') voiceId = 'pNInz6obpgDQ51uflcfy'
-        else if (voice === 'eleven_bella') voiceId = 'EXAVITQu4vr4xnSDxMaL'
-        
-        audioBuffer = await callElevenLabsTts(elevenLabsApiKey || '', text, voiceId)
-      } else {
-        audioBuffer = await callOpenAiTts(apiKey, baseUrl, text, voice, speed)
-      }
-
-      await fs.writeFile(cachedFilePath, audioBuffer)
-      return `media://local/${cachedFilePath}`
+      const { filePath, fromCache } = await getOrSynthesizeTts(text, voice, {
+        apiKey,
+        baseUrl,
+        elevenLabsApiKey,
+        speed
+      })
+      console.log(`[get-tts-audio] ${fromCache ? 'Cache hit' : 'Generated'}: "${text.substring(0, 30)}..."`)
+      return `media://local/${filePath}`
     } catch (err: any) {
       console.error('[Get TTS Audio Error]:', err)
       throw new Error(`Failed to get TTS audio: ${err.message}`)
