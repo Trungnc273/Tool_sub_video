@@ -9,6 +9,10 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Tài liệu nội bộ (review, spec, hiến pháp dự án) KHÔNG được vào bản phát hành
+  - '!**/*.md'
+  - '!docs/**'
+  - '!{.agentignore,chay_vietsub_pro.bat}'
 asarUnpack:
   - resources/**
   - node_modules/ffmpeg-static/**
