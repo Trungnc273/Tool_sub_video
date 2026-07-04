@@ -159,6 +159,9 @@ function registerSecureSettingHandlers(): void {
   })
 
   ipcMain.handle('is-encryption-available', () => safeStorage.isEncryptionAvailable())
+  // Hiển thị đúng phiên bản đang chạy trong UI — trước đây "Phiên bản 1.0.0" bị gắn
+  // cứng, không phản ánh bản build thật, gây khó khi cần xác minh máy khách chạy bản nào
+  ipcMain.handle('get-app-version', () => app.getVersion())
 }
 
 // Register IPC Handlers

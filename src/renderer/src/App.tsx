@@ -12,6 +12,13 @@ function App(): React.JSX.Element {
   const [bgVolume, setBgVolume] = useState(30)
   const [ttsVolume, setTtsVolume] = useState(100)
   const [showVolumePopover, setShowVolumePopover] = useState(false)
+  // Đọc phiên bản thật từ package.json qua main process — trước đây "1.0.0" bị gắn cứng,
+  // không phản ánh bản build thật, gây khó khi cần xác minh máy khách đang chạy bản nào
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    window.api.getAppVersion().then(setAppVersion).catch(() => {})
+  }, [])
 
   // Load projects and settings on mount
   useEffect(() => {
@@ -234,7 +241,7 @@ function App(): React.JSX.Element {
 
         {!isCollapsed && (
           <div className="sidebar-footer">
-            <div>Phiên bản 1.0.0</div>
+            <div>Phiên bản {appVersion || '...'}</div>
             <div>AI Subtitle Studio</div>
           </div>
         )}

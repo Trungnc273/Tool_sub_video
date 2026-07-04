@@ -77,6 +77,7 @@ declare global {
         speed?: number
       }) => Promise<string>
       extractEmbeddedSubtitles: (videoPath: string) => Promise<string>
+      getAppVersion: () => Promise<string>
       saveSecureSetting: (key: string, value: string) => Promise<boolean>
       loadSecureSetting: (key: string) => Promise<string>
       isEncryptionAvailable: () => Promise<boolean>

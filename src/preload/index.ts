@@ -50,6 +50,7 @@ const api = {
     ipcRenderer.invoke('get-tts-audio', params),
   extractEmbeddedSubtitles: (videoPath: string) =>
     ipcRenderer.invoke('extract-embedded-subtitles', videoPath),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   saveSecureSetting: (key: string, value: string) =>
     ipcRenderer.invoke('save-secure-setting', key, value),
   loadSecureSetting: (key: string) => ipcRenderer.invoke('load-secure-setting', key),
