@@ -1003,15 +1003,23 @@ async function getOrSynthesizeTts(
 
   ipcMain.handle('call-whisper-api', async (event, { apiKey, baseUrl, audioPath, language, prompt }) => {
     const MAX_WHISPER_BYTES = 24 * 1024 * 1024
+    const CHUNK_SECONDS = 480 // 8 phút/khúc
+    const OVERLAP_SECONDS = 5
     const stats = await fs.stat(audioPath)
 
-    if (stats.size <= MAX_WHISPER_BYTES) {
-      return transcribeOnce(apiKey, baseUrl, audioPath, language, prompt)
-    }
-
-    // Audio quá 25MB: chia khúc ~10 phút, chuyển ngữ từng khúc rồi ghép với offset thời gian
     assertFfmpegAvailable()
     const totalDuration = await getVideoDuration(audioPath)
+
+    // Chia khúc khi vượt NGƯỠNG DUNG LƯỢNG **hoặc** NGƯỠNG THỜI LƯỢNG.
+    // Bằng chứng (spec 06, đo thật bằng Whisper API với audio 15 phút nội dung đa dạng):
+    // gọi nguyên khối 1 lần thiếu 15/205 câu (7.3%, có cụm liền 6 câu); chia khúc ~7.5 phút
+    // chỉ còn thiếu 2/205 câu (~1%). Video 10-20 phút chỉ ~5-10MB (dưới xa ngưỡng 24MB) nên
+    // trước đây KHÔNG hề được chia khúc — đây là nguyên nhân thực sự của "sub bị thiếu".
+    const needsChunking = stats.size > MAX_WHISPER_BYTES || (totalDuration > 0 && totalDuration > CHUNK_SECONDS)
+
+    if (!needsChunking) {
+      return transcribeOnce(apiKey, baseUrl, audioPath, language, prompt)
+    }
     if (totalDuration <= 0) {
       throw new Error('Không đọc được thời lượng audio để chia khúc.')
     }
@@ -1019,10 +1027,8 @@ async function getOrSynthesizeTts(
     // Giải pháp: các khúc CHỒNG LẤN nhau 5s; khi ghép chỉ giữ nội dung thuộc "vùng sở
     // hữu" của mỗi khúc — câu vắt qua ranh giới luôn được một khúc nghe TRỌN VẸN.
     // (Không dùng dò-im-lặng vì video nhạc nền liên tục không có khoảng lặng để cắt.)
-    const CHUNK_SECONDS = 600
-    const OVERLAP_SECONDS = 5
     const numChunks = Math.ceil(totalDuration / CHUNK_SECONDS)
-    console.log(`[whisper] Audio ${(stats.size / 1024 / 1024).toFixed(1)}MB > 24MB — chia ${numChunks} khúc x ${CHUNK_SECONDS}s (chồng lấn ${OVERLAP_SECONDS}s)`)
+    console.log(`[whisper] Audio ${(stats.size / 1024 / 1024).toFixed(1)}MB, ${totalDuration.toFixed(0)}s — chia ${numChunks} khúc x ${CHUNK_SECONDS}s (chồng lấn ${OVERLAP_SECONDS}s)`)
 
     const merged = {
       text: '',
