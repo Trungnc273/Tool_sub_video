@@ -2581,17 +2581,13 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
         prompt = 'Hello, welcome. Short sentences, with proper punctuation.'
       }
 
-      // Bơm tên riêng từ Từ điển của người dùng vào prompt để Whisper nghe/viết đúng tên
-      // (lấy vế gốc của mỗi dòng "tên gốc = tên dịch", giới hạn ~120 ký tự)
-      if (settings.nameDictionary) {
-        const sourceNames = settings.nameDictionary
-          .split('\n')
-          .map((line) => line.split(/[=:：]/)[0].trim())
-          .filter(Boolean)
-          .join(', ')
-          .slice(0, 120)
-        if (sourceNames) prompt += ` ${sourceNames}.`
-      }
+      // KHÔNG bơm Từ điển tên riêng vào prompt Whisper (đã thử ở spec 03, bỏ ở spec 07).
+      // Bằng chứng thực tế: 2 máy cùng file/cùng cài đặt, chỉ khác nội dung Từ điển
+      // (chứa tên từ dự án khác, không liên quan video) → chênh lệch 138 vs 112 dòng
+      // (thiếu 19%). Prompt của Whisper là "ngữ cảnh mồi", nội dung không liên quan
+      // làm mô hình lệch hướng giải mã và bỏ cả cụm câu — rủi ro mất nội dung lớn hơn
+      // lợi ích "nghe đúng tên riêng". Ưu tiên đầy đủ/chính xác > tiện ích nhỏ.
+      // Từ điển vẫn dùng bình thường cho bước Dịch (không ảnh hưởng ở đó).
 
       // Video dài (audio >24MB) được chia khúc ở main process — hiện tiến độ từng khúc
       const cleanupProgress = window.api.onFfmpegProgress((data) => {
