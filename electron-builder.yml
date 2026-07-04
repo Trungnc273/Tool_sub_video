@@ -13,6 +13,21 @@ files:
   - '!**/*.md'
   - '!docs/**'
   - '!{.agentignore,chay_vietsub_pro.bat}'
+  # Loại trừ tường minh các gói build-only trong devDependencies. Cần thiết vì khi tự
+  # khai báo "files", cơ chế tự loại devDependencies mặc định của electron-builder
+  # không áp dụng đúng — nếu không loại trừ, cả electron/vite/typescript/eslint... bị
+  # đóng gói theo, khiến installer phồng gấp đôi (117MB -> 205MB, đã đo thực tế).
+  - '!node_modules/{electron,electron-builder,electron-vite,electron-winstaller,app-builder-lib,dmg-builder}/**'
+  - '!node_modules/{vite,typescript,eslint,prettier}/**'
+  - '!node_modules/{@vitejs,@rollup,@esbuild,@babel,@typescript-eslint}/**'
+  - '!node_modules/eslint-plugin-{react,react-hooks,react-refresh}/**'
+  - '!node_modules/@electron-toolkit/{eslint-config-prettier,eslint-config-ts,tsconfig}/**'
+  - '!node_modules/@types/**'
+  # lucide-react là dependency nhưng CHỈ dùng trong renderer — Vite đã gộp thẳng các icon
+  # đang dùng vào out/renderer/assets/*.js rồi, bản gốc trong node_modules là thừa hoàn
+  # toàn. Đây là thủ phạm chính gây phồng installer (4012/4303 file nén = icon riêng lẻ
+  # của lucide-react, đã xác minh bằng cách đọc header asar thật).
+  - '!node_modules/lucide-react/**'
 asarUnpack:
   - resources/**
   - node_modules/ffmpeg-static/**
