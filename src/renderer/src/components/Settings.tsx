@@ -20,6 +20,10 @@ export interface AppSettings {
     showBgStrip?: boolean
     bgStripHeight?: number
     bgStripPosY?: number
+    bgStripWidth?: number
+    bgStripPosX?: number
+    bgStripColor?: string
+    bgStripOpacity?: number
   }
 }
 
@@ -42,7 +46,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
       posX: 50,
       showBgStrip: false,
       bgStripHeight: 8,
-      bgStripPosY: 12
+      bgStripPosY: 12,
+      bgStripWidth: 100,
+      bgStripPosX: 50,
+      bgStripColor: '#15151d',
+      bgStripOpacity: 60
     }
   }
 

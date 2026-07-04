@@ -311,6 +311,18 @@ function cssColorToAss(cssColor: string): string {
   return '&H00FFFFFF';
 }
 
+// Chuyển màu hex + độ trong suốt (0-100%) sang định dạng màu ASS (&HAABBGGRR),
+// tái dùng cssColorToAss bằng cách dựng chuỗi rgba trung gian
+function hexOpacityToAss(hex: string, opacityPct: number): string {
+  const clean = (hex || '#000000').replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean.padEnd(6, '0');
+  const r = parseInt(full.substring(0, 2), 16) || 0;
+  const g = parseInt(full.substring(2, 4), 16) || 0;
+  const b = parseInt(full.substring(4, 6), 16) || 0;
+  const alpha = Math.min(100, Math.max(0, opacityPct)) / 100;
+  return cssColorToAss(`rgba(${r},${g},${b},${alpha})`);
+}
+
 function formatAssTime(ms: number): string {
   const totalSeconds = ms / 1000;
   const hours = Math.floor(totalSeconds / 3600);
@@ -367,17 +379,31 @@ Style: Default,Arial,${fontSize},${primaryColor},&H000000FF,${assOutlineColor},$
 `;
 
   if (style.showBgStrip) {
+    // Vị trí/kích thước không giới hạn (kéo tự do trên preview); màu + độ trong suốt
+    // tùy chỉnh thay vì đen cố định; \blur tạo hiệu ứng viền mờ như kính mờ (spec 06)
     const stripHeight = style.bgStripHeight !== undefined ? style.bgStripHeight : 8;
     const stripPosY = style.bgStripPosY !== undefined ? style.bgStripPosY : 12;
+    const stripWidth = style.bgStripWidth !== undefined ? style.bgStripWidth : 100;
+    const stripPosX = style.bgStripPosX !== undefined ? style.bgStripPosX : 50;
+    const stripColor = hexOpacityToAss(
+      style.bgStripColor || '#15151d',
+      style.bgStripOpacity !== undefined ? style.bgStripOpacity : 60
+    );
+
     const centerY = Math.round(playResY * (1 - stripPosY / 100));
     const h = Math.round(playResY * (stripHeight / 100));
     const topY = Math.round(centerY - h / 2);
     const bottomY = Math.round(centerY + h / 2);
 
-    ass += `Style: StripStyle,Arial,10,&H0D000000,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n`;
+    const centerX = Math.round(playResX * (stripPosX / 100));
+    const w = Math.round(playResX * (stripWidth / 100));
+    const leftX = Math.round(centerX - w / 2);
+    const rightX = Math.round(centerX + w / 2);
+
+    ass += `Style: StripStyle,Arial,10,${stripColor},&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n`;
     ass += `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,9:59:59.99,StripStyle,,0,0,0,,{\\pos(0,0)\\p1}m 0 ${topY} l ${playResX} ${topY} l ${playResX} ${bottomY} l 0 ${bottomY}{\\p0}\n`;
+Dialogue: 0,0:00:00.00,9:59:59.99,StripStyle,,0,0,0,,{\\pos(0,0)\\blur4\\p1}m ${leftX} ${topY} l ${rightX} ${topY} l ${rightX} ${bottomY} l ${leftX} ${bottomY}{\\p0}\n`;
   } else {
     ass += `[Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -3531,34 +3557,92 @@ ${lines}`
               </label>
 
               {settings.subtitleStyle?.showBgStrip && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '4px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      Vị trí Y dải nền: {settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12}%
-                    </span>
-                    <input
-                      type="range"
-                      min={2}
-                      max={50}
-                      step={1}
-                      style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
-                      value={settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12}
-                      onChange={(e) => handleStyleChange('bgStripPosY', parseInt(e.target.value) || 12)}
-                    />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                    Kéo trực tiếp trên video preview để đổi vị trí, hoặc chỉnh bằng thanh trượt bên dưới
+                  </span>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Vị trí dọc: {settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12}%
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
+                        value={settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12}
+                        onChange={(e) => handleStyleChange('bgStripPosY', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Vị trí ngang: {settings.subtitleStyle.bgStripPosX !== undefined ? settings.subtitleStyle.bgStripPosX : 50}%
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
+                        value={settings.subtitleStyle.bgStripPosX !== undefined ? settings.subtitleStyle.bgStripPosX : 50}
+                        onChange={(e) => handleStyleChange('bgStripPosX', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Chiều cao: {settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8}%
+                      </span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        step={1}
+                        style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
+                        value={settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8}
+                        onChange={(e) => handleStyleChange('bgStripHeight', parseInt(e.target.value) || 1)}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Chiều rộng: {settings.subtitleStyle.bgStripWidth !== undefined ? settings.subtitleStyle.bgStripWidth : 100}%
+                      </span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        step={1}
+                        style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
+                        value={settings.subtitleStyle.bgStripWidth !== undefined ? settings.subtitleStyle.bgStripWidth : 100}
+                        onChange={(e) => handleStyleChange('bgStripWidth', parseInt(e.target.value) || 1)}
+                      />
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      Chiều cao dải nền: {settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8}%
-                    </span>
-                    <input
-                      type="range"
-                      min={4}
-                      max={30}
-                      step={1}
-                      style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px' }}
-                      value={settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8}
-                      onChange={(e) => handleStyleChange('bgStripHeight', parseInt(e.target.value) || 8)}
-                    />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Màu dải nền</span>
+                      <input
+                        type="color"
+                        value={settings.subtitleStyle.bgStripColor || '#15151d'}
+                        onChange={(e) => handleStyleChange('bgStripColor', e.target.value)}
+                        style={{ width: '100%', height: '28px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'var(--bg-secondary)', cursor: 'pointer', padding: '2px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Độ trong suốt: {settings.subtitleStyle.bgStripOpacity !== undefined ? settings.subtitleStyle.bgStripOpacity : 60}%
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        style={{ width: '100%', accentColor: 'var(--accent-purple)', cursor: 'pointer', height: '4px', marginTop: '6px' }}
+                        value={settings.subtitleStyle.bgStripOpacity !== undefined ? settings.subtitleStyle.bgStripOpacity : 60}
+                        onChange={(e) => handleStyleChange('bgStripOpacity', parseInt(e.target.value))}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -4141,21 +4225,61 @@ ${lines}`
                   overflow: 'hidden'
                 }}
               >
-                {settings.subtitleStyle?.showBgStrip && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      bottom: `${settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12}%`,
-                      left: 0,
-                      right: 0,
-                      height: `${settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8}%`,
-                      background: '#0a0a0f',
-                      opacity: 0.95,
-                      transform: 'translateY(50%)',
-                      zIndex: 1
-                    }}
-                  />
-                )}
+                {settings.subtitleStyle?.showBgStrip && (() => {
+                  const stripPosX = settings.subtitleStyle.bgStripPosX !== undefined ? settings.subtitleStyle.bgStripPosX : 50
+                  const stripPosY = settings.subtitleStyle.bgStripPosY !== undefined ? settings.subtitleStyle.bgStripPosY : 12
+                  const stripWidth = settings.subtitleStyle.bgStripWidth !== undefined ? settings.subtitleStyle.bgStripWidth : 100
+                  const stripHeight = settings.subtitleStyle.bgStripHeight !== undefined ? settings.subtitleStyle.bgStripHeight : 8
+                  return (
+                    <div
+                      title="Kéo để đổi vị trí dải nền che"
+                      style={{
+                        position: 'absolute',
+                        bottom: `${stripPosY}%`,
+                        left: `${stripPosX}%`,
+                        width: `${stripWidth}%`,
+                        height: `${stripHeight}%`,
+                        transform: 'translate(-50%, 50%)',
+                        background: settings.subtitleStyle.bgStripColor || '#15151d',
+                        opacity: (settings.subtitleStyle.bgStripOpacity !== undefined ? settings.subtitleStyle.bgStripOpacity : 60) / 100,
+                        // backdrop-filter chỉ có hiệu lực trong preview (không dịch được sang ASS);
+                        // video xuất dùng \blur4 (xem convertToAss) làm mờ viền tương tự
+                        backdropFilter: 'blur(6px)',
+                        zIndex: 1,
+                        cursor: 'grab',
+                        pointerEvents: 'auto'
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const el = e.currentTarget as HTMLDivElement
+                        const container = el.parentElement
+                        if (!container) return
+                        const rect = container.getBoundingClientRect()
+                        let newX = stripPosX
+                        let newY = stripPosY
+                        el.style.cursor = 'grabbing'
+                        const onMove = (me: MouseEvent): void => {
+                          newX = Math.round(Math.min(100, Math.max(0, ((me.clientX - rect.left) / rect.width) * 100)))
+                          newY = Math.round(Math.min(100, Math.max(0, (1 - (me.clientY - rect.top) / rect.height) * 100)))
+                          el.style.left = `${newX}%`
+                          el.style.bottom = `${newY}%`
+                        }
+                        const onUp = (): void => {
+                          window.removeEventListener('mousemove', onMove)
+                          window.removeEventListener('mouseup', onUp)
+                          el.style.cursor = 'grab'
+                          onChangeSettings({
+                            ...settings,
+                            subtitleStyle: { ...settings.subtitleStyle, bgStripPosX: newX, bgStripPosY: newY }
+                          })
+                        }
+                        window.addEventListener('mousemove', onMove)
+                        window.addEventListener('mouseup', onUp)
+                      }}
+                    />
+                  )
+                })()}
                 {(() => {
                   const isInteractionActive = isDraggingIndividualClipRef.current || isTrimmingClipLeftRef.current || isTrimmingClipRightRef.current
                   const activeSegment = segments.find((s) => {
