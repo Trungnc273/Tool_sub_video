@@ -61,6 +61,7 @@ declare global {
         words: { word: string; start: number; end: number }[]
         segments: { start: number; end: number; text: string }[]
       }>
+      invoke: (channel: string, ...args: any[]) => Promise<any>
       callGptApi: (params: {
         apiKey: string
         baseUrl?: string

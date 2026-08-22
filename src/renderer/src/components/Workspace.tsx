@@ -2558,14 +2558,37 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
 
   // AI ASR (Speech-to-Text)
   const handleRunASR = async () => {
-    if (!settings.apiKey) {
-      alert('Vui lòng cấu hình OpenAI API Key trong Cài đặt trước!')
-      return
+    // Check user's preference for Whisper source
+    const preferLocal = settings.whisperSource === 'local' || !settings.whisperSource
+
+    let useLocalWhisper = false
+    
+    if (preferLocal) {
+      // User wants Local Whisper - check if it's available
+      try {
+        const localCheck = await window.api.invoke('check-local-whisper')
+        if (localCheck.ready) {
+          useLocalWhisper = true
+          console.log('[ASR] Using Local Whisper (Python available)')
+        } else {
+          alert('Local Whisper chưa sẵn sàng!\n\nVui lòng cài đặt:\n1. Python 3.11+ (python.org)\n2. Chạy lệnh: pip install faster-whisper\n\nHoặc chuyển sang Whisper API (trả phí) trong Cài đặt.')
+          return
+        }
+      } catch (err) {
+        alert('Không thể kết nối Local Whisper!\n\nVui lòng cài đặt:\n1. Python 3.11+ (python.org)\n2. Chạy lệnh: pip install faster-whisper\n\nHoặc chuyển sang Whisper API (trả phí) trong Cài đặt.')
+        return
+      }
+    } else {
+      // User wants OpenAI API - check API key
+      if (!settings.apiKey) {
+        alert('Vui lòng cấu hình API Key cho Whisper API trong Cài đặt!\n\nHoặc chuyển sang Local Whisper (miễn phí, không giới hạn) trong phần cài đặt Whisper STT.')
+        return
+      }
     }
 
     setIsProcessing(true)
     setProgress(10)
-    setStatusMessage('Đang kết nối OpenAI Whisper API...')
+    setStatusMessage(useLocalWhisper ? 'Đang khởi động Local Whisper...' : 'Đang kết nối OpenAI Whisper API...')
 
     try {
       // Prompt mồi TRUNG TÍNH: chỉ làm mẫu ngắt câu/dấu câu, không chứa nội dung chủ đề
@@ -2599,13 +2622,24 @@ Trả về DUY NHẤT chuỗi JSON hợp lệ. Không viết thêm bất kỳ ch
 
       let asrResult: Awaited<ReturnType<typeof window.api.callWhisperApi>>
       try {
-        asrResult = await window.api.callWhisperApi({
-          apiKey: settings.apiKey,
-          baseUrl: settings.baseUrl,
-          audioPath: project.audioPath,
-          language: asrLanguage || undefined,
-          prompt
-        })
+        if (useLocalWhisper) {
+          // Use Local Whisper (Python)
+          console.log('[ASR] Calling Local Whisper...')
+          asrResult = await window.api.invoke('call-local-whisper', {
+            audioPath: project.audioPath,
+            language: asrLanguage || 'auto',
+            model: 'medium' // Can be configurable later
+          })
+        } else {
+          // Use OpenAI API
+          asrResult = await window.api.callWhisperApi({
+            apiKey: settings.apiKey,
+            baseUrl: settings.baseUrl,
+            audioPath: project.audioPath,
+            language: asrLanguage || undefined,
+            prompt
+          })
+        }
       } finally {
         cleanupProgress()
       }
@@ -3214,7 +3248,10 @@ ${lines}`
             >
               <div style={{ flexGrow: 1 }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', color: '#fff' }}>
-                  1. Nhận diện giọng nói
+                  1. Nhận diện giọng nói (Whisper STT)
+                </span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  {settings.whisperSource === 'local' || !settings.whisperSource ? '🚀 Local Whisper (Miễn phí)' : '☁️ OpenAI API (Trả phí)'}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -3247,7 +3284,10 @@ ${lines}`
             >
               <div style={{ flexGrow: 1 }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600, display: 'block', color: '#fff' }}>
-                  2. Dịch tự động bằng GPT
+                  2. Dịch tự động bằng AI
+                </span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Mô hình: {settings.model || 'deepseek-v4-flash'}
                 </span>
               </div>
               <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '0.8rem', height: '28px' }} onClick={handleTranslate}>

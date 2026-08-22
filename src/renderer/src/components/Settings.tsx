@@ -1,6 +1,59 @@
 import React, { useState, useEffect } from 'react'
 import { Save, Settings as SettingsIcon, Sliders, Palette, Eye, Plus, Minus } from 'lucide-react'
 
+const WhisperStatusIndicator: React.FC = () => {
+  const [status, setStatus] = useState<{ ready: boolean; pythonVersion?: string; hasFasterWhisper?: boolean; modelPath?: string } | null>(null)
+  const [checking, setChecking] = useState(true)
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const result = await window.api.invoke('check-local-whisper')
+        setStatus(result)
+      } catch (err) {
+        setStatus({ ready: false })
+      } finally {
+        setChecking(false)
+      }
+    }
+    checkStatus()
+  }, [])
+
+  if (checking) {
+    return (
+      <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>🔄</span> Đang kiểm tra...
+      </div>
+    )
+  }
+
+  if (!status || !status.ready) {
+    return (
+      <div style={{ fontSize: '0.85rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>❌</span> Chưa cài đặt Python hoặc faster-whisper
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ fontSize: '0.85rem', color: '#10b981', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span>✅</span> Sẵn sàng - Python {status.pythonVersion}
+      </div>
+      {status.hasFasterWhisper && (
+        <div style={{ color: 'var(--text-muted)', marginLeft: '22px' }}>
+          📦 faster-whisper đã cài đặt
+        </div>
+      )}
+      {status.modelPath && (
+        <div style={{ color: 'var(--text-muted)', marginLeft: '22px', fontSize: '0.8rem' }}>
+          🎯 Mô hình Whisper đã tải
+        </div>
+      )}
+    </div>
+  )
+}
+
 export interface AppSettings {
   apiKey: string
   baseUrl: string
@@ -9,6 +62,7 @@ export interface AppSettings {
   systemPrompt: string
   characterContext?: string
   nameDictionary?: string
+  whisperSource?: 'openai' | 'local'
   subtitleStyle: {
     fontSize: number
     color: string
@@ -29,13 +83,14 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
-  baseUrl: 'https://api.openai.com/v1',
+  baseUrl: 'https://api.ai-box.vn/v1',
   elevenLabsApiKey: '',
-  model: 'gpt-4o-mini',
+  model: 'deepseek-v4-flash',
   systemPrompt:
     'Dịch phụ đề từ ngôn ngữ nguồn sang tiếng Việt. Yêu cầu dịch mượt mà, văn phong tự nhiên, phù hợp với ngữ cảnh phim/video. Giữ nguyên định dạng và ý nghĩa của các đại từ xưng hô phù hợp cho các nhân vật dựa vào ngữ cảnh nếu có.',
   characterContext: 'Xưng hô kiếm hiệp cổ trang (Ta - Ngươi) hoặc đối thoại hiện đại tự nhiên (Anh - Em, Tôi - Bạn) tùy thuộc vào thể loại video.',
   nameDictionary: '',
+  whisperSource: 'local',
     subtitleStyle: {
       fontSize: 24,
       color: '#ffffff',
@@ -118,22 +173,38 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSaveSettings }) 
         <div className="glass-panel" style={{ padding: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
             <SettingsIcon size={20} color="var(--accent-purple)" />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Cấu hình OpenAI API</h3>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Cấu hình API Dịch thuật (AI)</h3>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">OpenAI API Key</label>
-            <input
-              type="password"
-              className="form-input"
-              placeholder="sk-..."
-              value={localSettings.apiKey}
-              onChange={(e) => handleChange('apiKey', e.target.value)}
-            />
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-              API Key sẽ được lưu trữ an toàn trên thiết bị của bạn.
-            </span>
-          </div>
+          {!localSettings.apiKey && (
+            <div className="form-group">
+              <label className="form-label">API Key (Tùy chọn)</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder="sk-..."
+                value={localSettings.apiKey}
+                onChange={(e) => handleChange('apiKey', e.target.value)}
+              />
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                Để trống nếu đã cấu hình trong file .env. API Key sẽ được lưu trữ an toàn trên thiết bị.
+              </span>
+            </div>
+          )}
+
+          {localSettings.apiKey && (
+            <div style={{ padding: '12px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', color: '#10b981' }}>
+                <span>✅</span> API Key đã được cấu hình
+              </div>
+              <button 
+                onClick={() => handleChange('apiKey', '')}
+                style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Xóa và nhập lại
+              </button>
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div className="form-group">
@@ -143,18 +214,23 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSaveSettings }) 
                 className="form-input"
                 value={localSettings.baseUrl}
                 onChange={(e) => handleChange('baseUrl', e.target.value)}
+                placeholder="https://api.ai-box.vn/v1"
               />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                DeepSeek, OpenAI, hoặc API tương thích
+              </span>
             </div>
             <div className="form-group">
-              <label className="form-label">Mô hình GPT</label>
+              <label className="form-label">Mô hình AI</label>
               <select
                 className="form-select"
                 value={localSettings.model}
                 onChange={(e) => handleChange('model', e.target.value)}
               >
-                <option value="gpt-4o-mini">gpt-4o-mini (Khuyên dùng - Nhanh & Rẻ)</option>
-                <option value="gpt-4o">gpt-4o (Độ chính xác cao hơn)</option>
-                <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                <option value="deepseek-v4-flash">deepseek-v4-flash (Khuyên dùng - Nhanh & Rẻ)</option>
+                <option value="gpt-4o-mini">gpt-4o-mini (OpenAI)</option>
+                <option value="gpt-4o">gpt-4o (OpenAI - Độ chính xác cao)</option>
+                <option value="gpt-3.5-turbo">gpt-3.5-turbo (OpenAI - Cũ)</option>
               </select>
             </div>
           </div>
@@ -180,6 +256,68 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSaveSettings }) 
               API Key dùng để lấy giọng nói nhân tạo chất lượng cao từ ElevenLabs.
             </span>
           </div>
+        </div>
+
+        {/* Whisper STT Settings */}
+        <div className="glass-panel" style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+            <SettingsIcon size={20} color="var(--accent-purple)" />
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Cấu hình Whisper STT (Nhận diện giọng nói)</h3>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" style={{ marginBottom: '12px' }}>Nguồn Whisper</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', cursor: 'pointer', border: localSettings.whisperSource === 'local' ? '2px solid var(--accent-purple)' : '2px solid transparent' }}>
+                <input
+                  type="radio"
+                  name="whisperSource"
+                  value="local"
+                  checked={localSettings.whisperSource === 'local' || !localSettings.whisperSource}
+                  onChange={(e) => handleChange('whisperSource', e.target.value)}
+                  style={{ marginTop: '2px', accentColor: 'var(--accent-purple)' }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>🚀 Local Whisper (Khuyên dùng - Miễn phí, Không giới hạn)</div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Sử dụng faster-whisper chạy trên máy tính của bạn. Không cần API key, không giới hạn, hoàn toàn miễn phí.
+                  </div>
+                  <WhisperStatusIndicator />
+                </div>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', cursor: 'pointer', border: localSettings.whisperSource === 'openai' ? '2px solid var(--accent-purple)' : '2px solid transparent' }}>
+                <input
+                  type="radio"
+                  name="whisperSource"
+                  value="openai"
+                  checked={localSettings.whisperSource === 'openai'}
+                  onChange={(e) => handleChange('whisperSource', e.target.value)}
+                  style={{ marginTop: '2px', accentColor: 'var(--accent-purple)' }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>☁️ OpenAI Whisper API (Trả phí)</div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    Sử dụng API của OpenAI. Yêu cầu API key và tính phí theo số phút audio. File tối đa 25MB.
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {(localSettings.whisperSource === 'local' || !localSettings.whisperSource) && (
+            <div style={{ marginTop: '16px', padding: '12px', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.3)', borderRadius: '8px', fontSize: '0.85rem' }}>
+              <div style={{ fontWeight: 600, marginBottom: '6px' }}>💡 Hướng dẫn cài đặt Local Whisper:</div>
+              <ol style={{ margin: '8px 0 0 20px', lineHeight: '1.6' }}>
+                <li>Tải Python 3.11+ từ <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-purple)' }}>python.org</a></li>
+                <li>Mở Command Prompt (cmd) và chạy: <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: '3px' }}>pip install faster-whisper</code></li>
+                <li>Khởi động lại ứng dụng Sub 4.0</li>
+              </ol>
+              <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Xem thêm tại <a href="https://github.com/SYSTRAN/faster-whisper" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-purple)' }}>github.com/SYSTRAN/faster-whisper</a>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Translation Settings */}

@@ -31,6 +31,13 @@ files:
 asarUnpack:
   - resources/**
   - node_modules/ffmpeg-static/**
+extraResources:
+  - from: "resources/python"
+    to: "python"
+    filter: ["**/*"]
+  - from: "resources/python_modules"
+    to: "python_modules"
+    filter: ["**/*"]
 win:
   executableName: vietsub-pro
 nsis:

@@ -61,7 +61,9 @@ const api = {
     return () => {
       ipcRenderer.removeListener('ffmpeg-progress', subscription)
     }
-  }
+  },
+  // Generic invoke for Local Whisper and other new handlers
+  invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

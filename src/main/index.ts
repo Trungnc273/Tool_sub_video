@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, dialog, protocol, safeStorage } fro
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { transcribeWithLocalWhisper, checkPythonEnvironment, isModelDownloaded } from './whisper-local'
 import { spawn } from 'child_process'
 import { createReadStream, promises as fs } from 'fs'
 import { createHash } from 'crypto'
@@ -1004,6 +1005,35 @@ async function getOrSynthesizeTts(
     }
   }
 
+  // Handle: Check local Whisper environment
+  ipcMain.handle('check-local-whisper', async () => {
+    return await checkPythonEnvironment()
+  })
+
+  // Handle: Check if model is downloaded
+  ipcMain.handle('check-whisper-model', async (_, modelName) => {
+    return await isModelDownloaded(modelName || 'medium')
+  })
+
+  // Handle: Local Whisper transcription (NEW)
+  ipcMain.handle('call-local-whisper', async (event, { audioPath, language, model }) => {
+    try {
+      const result = await transcribeWithLocalWhisper(
+        audioPath,
+        language || 'auto',
+        model || 'medium',
+        (message) => {
+          // Send progress to renderer
+          event.sender.send('whisper-progress', { message })
+        }
+      )
+      return result
+    } catch (error: any) {
+      throw new Error(`Local Whisper failed: ${error.message}`)
+    }
+  })
+
+  // Handle: OpenAI Whisper API (LEGACY - keep for backward compatibility)
   ipcMain.handle('call-whisper-api', async (event, { apiKey, baseUrl, audioPath, language, prompt }) => {
     const MAX_WHISPER_BYTES = 24 * 1024 * 1024
     const CHUNK_SECONDS = 480 // 8 phút/khúc
