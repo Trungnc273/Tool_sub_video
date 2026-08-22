@@ -61,6 +61,14 @@ def get_or_load_model(model_name="medium", device="auto"):
 def transcribe_audio(audio_path, language="auto", model_name="medium"):
     """Transcribe audio file using Whisper"""
     audio_path = Path(audio_path)
+    
+    # Debug logging
+    print(f"[Whisper Debug] Audio path: {audio_path}", file=sys.stderr)
+    print(f"[Whisper Debug] Path exists: {audio_path.exists()}", file=sys.stderr)
+    if audio_path.exists():
+        print(f"[Whisper Debug] Path absolute: {audio_path.absolute()}", file=sys.stderr)
+        print(f"[Whisper Debug] File size: {audio_path.stat().st_size} bytes", file=sys.stderr)
+    
     if not audio_path.exists():
         return {
             "error": f"Audio file not found: {audio_path}",
@@ -70,9 +78,12 @@ def transcribe_audio(audio_path, language="auto", model_name="medium"):
         }
     
     try:
+        print(f"[Whisper Debug] Loading model: {model_name}", file=sys.stderr)
         model = get_or_load_model(model_name)
+        print(f"[Whisper Debug] Model loaded successfully", file=sys.stderr)
         
         # Transcribe with word timestamps
+        print(f"[Whisper Debug] Starting transcription...", file=sys.stderr)
         segments_iter, info = model.transcribe(
             str(audio_path),
             language=None if language == "auto" else language,
@@ -84,6 +95,7 @@ def transcribe_audio(audio_path, language="auto", model_name="medium"):
                 "min_silence_duration_ms": 500
             }
         )
+        print(f"[Whisper Debug] Transcription started, detected language: {info.language}", file=sys.stderr)
         
         # Convert to JSON-serializable format
         result = {
@@ -116,6 +128,13 @@ def transcribe_audio(audio_path, language="auto", model_name="medium"):
         return result
         
     except Exception as e:
+        # Detailed error logging
+        print(f"[Whisper Debug] Exception occurred: {type(e).__name__}", file=sys.stderr)
+        print(f"[Whisper Debug] Exception message: {str(e)}", file=sys.stderr)
+        import traceback
+        print(f"[Whisper Debug] Traceback:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        
         return {
             "error": str(e),
             "text": "",
