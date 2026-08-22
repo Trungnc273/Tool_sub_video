@@ -154,13 +154,15 @@ def main():
     
     result = transcribe_audio(args.audio_path, args.language, args.model)
     
-    # Output JSON
+    # Output JSON with UTF-8 encoding
     output_json = json.dumps(result, ensure_ascii=False, indent=2)
     
     if args.output:
         Path(args.output).write_text(output_json, encoding="utf-8")
         print(f"[Whisper] Saved to: {args.output}", file=sys.stderr)
     else:
+        # Force UTF-8 output for Windows console (support Chinese, Vietnamese, etc.)
+        sys.stdout.reconfigure(encoding='utf-8')
         print(output_json)
     
     # Exit code
