@@ -35,19 +35,15 @@ except ImportError:
 def get_or_load_model(model_name="medium", device="auto"):
     """Load Whisper model with auto device detection"""
     if device == "auto":
-        try:
-            import ctranslate2
-            if ctranslate2.get_cuda_device_count() > 0:
-                device = "cuda"
-                compute_type = "float16"
-            else:
-                device = "cpu"
-                compute_type = "int8"
-        except Exception:
-            device = "cpu"
-            compute_type = "int8"
+        # Force CPU mode - GPU requires CUDA toolkit installed
+        # Most users don't have CUDA, so default to CPU
+        device = "cpu"
+        compute_type = "int8"
+        print(f"[Whisper Debug] Using CPU mode (int8) - GPU disabled to avoid CUDA DLL errors", file=sys.stderr)
     else:
         compute_type = "int8" if device == "cpu" else "float16"
+    
+    print(f"[Whisper Debug] Device: {device}, Compute type: {compute_type}", file=sys.stderr)
     
     model = WhisperModel(
         model_name,
